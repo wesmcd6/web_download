@@ -22,6 +22,16 @@
     <div class="row">
       <button id="go" class="primary">Connect and read settings</button>
     </div>
+    <div class="row" style="margin-top:.9rem">
+      <label><input type="checkbox" id="gmr" checked> also read the
+        <strong>ESP firmware</strong> version</label>
+    </div>
+    <p class="t-dim" style="margin:.5rem 0 0">Reading the ESP firmware needs
+       passthrough (<code>ESPw42!</code> … <code>###</code>), which briefly takes
+       the mount out of ES command mode. The exit is always sent and ES commands
+       are re-tested afterwards. Automatically skipped on RN-131, which is not an
+       AT-command device. Untick if the mount is tracking and you would rather
+       not interrupt it.</p>
   </div>
 
   <details class="card">
@@ -37,22 +47,6 @@
     </div>
   </details>
 
-  <details class="card">
-    <summary>Also read the Wi-Fi module's own version (changes mode)</summary>
-    <p style="margin:.8rem 0 0">Gets the module's <code>AT+GMR</code> output — AT
-       version, SDK version and the bin version such as
-       <code>ES2.2.0(WROOM-32)</code>. Reaching it means
-       <code>ESPw42!</code>, which hands the USB line to the module and
-       <strong>blocks the mount's command interpreter</strong> until passthrough
-       ends. The exit (<code>###</code>) is always sent, even if the module never
-       answers, and ES commands are then re-tested before reporting success.</p>
-    <p style="margin:.6rem 0 0">Automatically skipped if the mount reports an
-       <strong>RN-131</strong>: that module is not an AT-command device, so
-       nothing is sent to it at all.</p>
-    <div class="row" style="margin-top:.8rem">
-      <label><input type="checkbox" id="gmr"> enter passthrough and run <code>AT+GMR</code></label>
-    </div>
-  </details>
 
   <div id="unsupported" class="notice bad" hidden></div>
   <div id="result" hidden></div>
@@ -116,16 +110,19 @@ function show(info, baud, envision, esp) {
   let moduleHw = '';
   let moduleDetail = '';
 
-  if (esp) {
+  // Always render the row. A missing ESP firmware line is information too —
+  // silence just looks like the tool forgot.
+  if (!esp) {
+    espFirmware = row('ESP firmware', 'Not read',
+                      'The ESP firmware option was switched off.');
+  } else {
     const g = esp.gmr;
     if (esp.skipped) {
       espFirmware = row('ESP firmware', 'Not applicable — RN-131',
                         esp.reason ?? 'RN-131 does not use the AT command set.');
     } else if (g && g.bin) {
       espFirmware = row('ESP firmware', g.bin,
-                        g.esBranded
-                          ? 'ES-branded build — this is what the mount matches on.'
-                          : 'Not ES-branded; the mount would report this module as type 1.');
+                        g.esBranded ? null : 'Not an ES-branded build.');
     } else {
       espFirmware = row('ESP firmware', 'Not read',
                         esp.error ?? 'AT+GMR did not return a Bin version line.');
@@ -135,11 +132,7 @@ function show(info, baud, envision, esp) {
       moduleHw = row(
         'Module hardware',
         g.module ? `${g.module}  (${g.tag})` : `Unrecognized  (${g.tag})`,
-        g.module
-          ? (g.moduleConfirmed
-              ? 'Read straight off the module, not inferred by the mount.'
-              : 'Mapped from the tag but not yet seen on real hardware here.')
-          : 'The tag did not match a known module — please report it.');
+        g.module ? null : 'Tag did not match a known module — please report it.');
     }
 
     if (g && g.at) moduleDetail += row('Module AT version', g.at);
@@ -215,7 +208,13 @@ $('go').addEventListener('click', async () => {
 
     let esp = null;
     if ($('gmr').checked) {
-      esp = await readEspVersion(transport, info, (m) => log(m));
+      try {
+        esp = await readEspVersion(transport, info, (m) => log(m));
+      } catch (e) {
+        // Never let the module read take the whole report down with it.
+        esp = { skipped: false, error: e.message };
+        log(`ESP firmware read failed: ${e.message}`, 't-err');
+      }
       if (esp.skipped) log(`Module version skipped: ${esp.reason}`, 't-dim');
       else if (esp.error) log(`AT+GMR: ${esp.error}`, 't-err');
       else {

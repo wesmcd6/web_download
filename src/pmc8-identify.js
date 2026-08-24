@@ -141,17 +141,7 @@ export function settingsRows(cfg) {
     {
       label: 'Mount Type',
       value: cfg.model,
-      note: [
-        `From P9 = ${cfg.p9} — a stored default, not a detection.`,
-        model?.note,
-        'P9 is partly deprecated: it once encoded both mount and Wi-Fi type and ' +
-        'was never completed. The firmware now auto-detects Wi-Fi but still falls ' +
-        'back to P9 for the mount, so this can be wrong if P9 was never set right.',
-        cfg.modelAmbiguous
-          ? 'P9 is 0 and is never range-corrected at boot, so a corrupted setting ' +
-            'is indistinguishable from a genuine iEXOS-100 here.'
-          : null,
-      ].filter(Boolean).join(' '),
+      note: [`P9 = ${cfg.p9}`, model?.note].filter(Boolean).join(' · '),
     },
     { label: 'Motor Current Slew, ma', value: String(cfg.slewCurrentMa) },
     { label: 'Motor Current Track, ma', value: String(cfg.trackCurrentMa) },
@@ -161,11 +151,7 @@ export function settingsRows(cfg) {
     {
       label: 'WiFi Type',
       value: cfg.wifi,
-      note: [
-        'Auto-detected by the PMC-8 at every boot — this is the reliable field, ' +
-        'not P9.',
-        cfg.wifiCaveat,
-      ].filter(Boolean).join(' '),
+      note: ['Auto-detected at boot.', cfg.wifiCaveat].filter(Boolean).join(' '),
     },
   ];
 }
