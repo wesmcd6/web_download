@@ -106,6 +106,96 @@ export function parseESGi(reply) {
   return out;
 }
 
+/**
+ * The full settings block, in the same order and with the same labels the PMC8
+ * Dashboard uses, so the two tools can be read side by side.
+ */
+export function settingsRows(cfg) {
+  const model = MODELS[cfg.p9];
+  return [
+    { label: 'Baud Rate', value: String(cfg.baud) },
+    { label: 'IP Protocol', value: cfg.tcpip ? 'TCP' : 'UDP' },
+    { label: 'Continuous Track', value: cfg.trackOnCommsLoss ? 'On' : 'Off' },
+    { label: 'Run on Boot', value: cfg.raRunOnBoot ? 'YES' : 'NO' },
+    { label: 'Hemisphere', value: cfg.hemisphere },
+    { label: 'Sidereal Rate Fraction RA %', value: String(cfg.guideRateRA) },
+    { label: 'Sidereal Rate Fraction DEC %', value: String(cfg.guideRateDec) },
+    {
+      label: 'Mount Type',
+      value: cfg.model,
+      note: [
+        `P9 = ${cfg.p9}`,
+        model?.note,
+        cfg.modelAmbiguous
+          ? 'P9 is never range-corrected at boot, so a corrupted setting is ' +
+            'indistinguishable from a genuine iEXOS-100 here.'
+          : null,
+      ].filter(Boolean).join(' · '),
+    },
+    { label: 'Motor Current Slew, ma', value: String(cfg.slewCurrentMa) },
+    { label: 'Motor Current Track, ma', value: String(cfg.trackCurrentMa) },
+    { label: 'WiFi Channel', value: String(cfg.wifiChannel) },
+    { label: 'ST4 Status', value: cfg.st4Disabled ? 'Disabled' : 'Enabled' },
+    { label: 'ST4 Type', value: cfg.st4Analog ? 'Analog' : 'Digital' },
+    { label: 'WiFi Type', value: cfg.wifi, note: cfg.wifiCaveat },
+  ];
+}
+
+/**
+ * ESGe! status as a 3-bit field: bit 0 = Envision capable, bit 1 = boot flag,
+ * bit 2 = currently on. Returns null if the reply is not a digit 0-7.
+ */
+export function parseESGe(reply) {
+  const s = typeof reply === 'string' ? reply : DEC.decode(reply);
+  const i = s.indexOf('ESGe');
+  let r = (i >= 0 ? s.slice(i + 4) : s).trim();
+  const bang = r.indexOf('!');
+  if (bang >= 0) r = r.slice(0, bang);
+  r = r.trim();
+  if (!/^[0-7]$/.test(r)) return null;
+  const v = Number(r);
+  return { value: v, able: !!(v & 1), boot: !!(v & 2), on: !!(v & 4) };
+}
+
+/** Human-readable Fast Server status, matching the Dashboard's wording. */
+export function fastServerText({ able, boot, on }) {
+  if (!able) {
+    return boot
+      ? 'Not installed (boot flag set): update your WiFi firmware.'
+      : 'Not installed: update your WiFi firmware.';
+  }
+  if (on && boot) return 'Enabled — running now.';
+  if (on && !boot) return 'Running now (boot off).';
+  if (boot) return 'Enabled.';
+  return 'Available.';
+}
+
+/**
+ * Read Envision / Fast Server status.
+ *
+ * NOT part of identify(), and deliberately opt-in: despite looking like a
+ * getter, ESGe! is not side-effect free. GET_ENVISION_CAPABLE sends AT and
+ * AT+ENVISION? to the Wi-Fi module and, if the module replies ERROR, does
+ * SET.setBYTE(ENVISION_BOOT, 0) followed by set.commit — an EEPROM write. It
+ * can also block for up to ~2s waiting on the module.
+ *
+ * Skipped entirely on RN-131, which the firmware reports as never capable.
+ */
+export async function readEnvision(transport, cfg, log = () => {}) {
+  if (cfg.wifiType === 0) {
+    return { skipped: true, text: 'Not available on RN-131 modules.' };
+  }
+  log('Reading Envision / Fast Server status (ESGe!)…');
+  const raw = await ask(transport, 'ESGe!', { expect: 'ESGe', timeoutMs: 4000 });
+  const parsed = parseESGe(raw);
+  if (!parsed) return { skipped: false, text: 'Unknown (no usable response).', raw };
+  // Codes 4 and 6 are "on but not capable", which cannot happen.
+  if (parsed.on && !parsed.able) {
+    return { skipped: false, ...parsed, text: `Unknown (impossible code ${parsed.value}).` };
+  }
+  return { skipped: false, ...parsed, text: fastServerText(parsed) };
+}
+
 /** Parse the ESGv reply: "ESGv" + build string + "!" (no CRLF terminator). */
 export function parseESGv(reply) {
   const s = typeof reply === 'string' ? reply : DEC.decode(reply);

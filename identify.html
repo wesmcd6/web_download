@@ -20,10 +20,23 @@
     <p>Opening the port can make the mount reboot on its own, which takes 15–20&nbsp;seconds.
        If that happens this just keeps asking until it answers — leave it running.</p>
     <div class="row">
-      <button id="go" class="primary">Connect and identify</button>
+      <button id="go" class="primary">Connect and read settings</button>
       <label><input type="checkbox" id="sweep"> try all baud rates</label>
     </div>
   </div>
+
+  <details class="card">
+    <summary>Also read Fast Server / Envision status (not read-only)</summary>
+    <p style="margin:.8rem 0 0">The Dashboard reads this with <code>ESGe!</code>.
+       Despite looking like a getter it is <strong>not side-effect free</strong>: if
+       the Wi-Fi module answers <code>ERROR</code>, the firmware writes
+       <code>ENVISION_BOOT = 0</code> to EEPROM and commits. It can also block for a
+       couple of seconds waiting on the module. Off by default for that reason;
+       skipped automatically on RN-131, which is never Envision-capable.</p>
+    <div class="row" style="margin-top:.8rem">
+      <label><input type="checkbox" id="envision"> send <code>ESGe!</code> as well</label>
+    </div>
+  </details>
 
   <div id="unsupported" class="notice bad" hidden></div>
   <div id="result" hidden></div>
@@ -32,7 +45,7 @@
 
 <script type="module">
 import { SerialTransport, requestPort, isSupported, unsupportedReason } from './src/p1-serial.js';
-import { identify, BAUD_RATES } from './src/pmc8-identify.js';
+import { identify, settingsRows, readEnvision, BAUD_RATES } from './src/pmc8-identify.js';
 
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
@@ -53,39 +66,58 @@ if (!isSupported() || !window.isSecureContext) {
   $('go').disabled = true;
 }
 
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
 function row(k, v, extra) {
-  return `<tr><th>${k}</th><td class="val">${v}${
-    extra ? `<br><span class="t-dim">${extra}</span>` : ''}</td></tr>`;
+  return `<tr><th>${esc(k)}</th><td class="val">${esc(v)}${
+    extra ? `<br><span class="t-dim">${esc(extra)}</span>` : ''}</td></tr>`;
 }
 
-function show(info, baud) {
+function show(info, baud, envision) {
   const el = $('result');
   el.hidden = false;
+
+  const rows = settingsRows(info)
+    .map((r) => row(r.label, r.value, r.note))
+    .join('\n        ');
+
+  const connNote = baud && baud !== info.baud
+    ? row('Connected at', `${baud} baud`,
+          'Differs from the stored baud rate above.')
+    : '';
+
+  const fast = envision
+    ? row('Fast Server (Envision)', envision.text,
+          envision.value != null ? `ESGe! = ${envision.value}` : null)
+    : '';
+
   el.innerHTML = `
     <div class="card">
-      <h3>Your mount</h3>
+      <h3>Configuration</h3>
       <table>
-        ${row('Mount model', info.model,
-              [info.modelNote,
-               info.modelAmbiguous
-                 ? 'P9 is 0. The firmware never range-corrects P9, so a corrupted ' +
-                   'setting looks identical to a genuine iEXOS-100 here.'
-                 : null].filter(Boolean).join(' — ') || null)}
         ${row('Firmware', info.firmware)}
-        ${row('Wi-Fi module', info.wifi, info.wifiCaveat)}
-        ${row('Serial baud', `${info.baud}${baud && baud !== info.baud ? ` (connected at ${baud})` : ''}`)}
-        ${row('Hemisphere', info.hemisphere)}
-        ${row('Wi-Fi channel', info.wifiChannel)}
-        ${row('Protocol', info.tcpip ? 'TCP/IP' : 'UDP/IP')}
-        ${row('Motor current', `slew ${info.slewCurrentMa} mA / track ${info.trackCurrentMa} mA`)}
-        ${row('Guide rate (% sidereal)', `RA ${info.guideRateRA} / Dec ${info.guideRateDec}`)}
-        ${row('ST4', info.st4Disabled ? 'disabled' : (info.st4Analog ? 'analog' : 'digital'))}
+        ${rows}
+        ${fast}
+        ${connNote}
         ${row('Raw ESGi', info.raw)}
       </table>
-      <p class="t-dim" style="margin-top:.9rem">
-        Copy this block into a support message and nobody has to ask you which
-        module you have.</p>
+      <div class="row" style="margin-top:1rem">
+        <button id="copycfg">Copy as text</button>
+        <span class="t-dim">Paste this into a support message and nobody has to
+          ask you which module you have.</span>
+      </div>
     </div>`;
+
+  $('copycfg').addEventListener('click', () => {
+    const lines = [`Firmware: ${info.firmware}`];
+    for (const r of settingsRows(info)) lines.push(`${r.label}: ${r.value}`);
+    if (envision) lines.push(`Fast Server (Envision): ${envision.text}`);
+    lines.push(`Raw ESGi: ${info.raw}`);
+    navigator.clipboard.writeText(lines.join('\n'));
+    $('copycfg').textContent = 'Copied';
+    setTimeout(() => { $('copycfg').textContent = 'Copy as text'; }, 1500);
+  });
 }
 
 $('go').addEventListener('click', async () => {
@@ -116,8 +148,21 @@ $('go').addEventListener('click', async () => {
     }
 
     if (!info) throw new Error('The mount did not answer. Nothing was changed.');
-    log('Done — nothing was written to the mount.', 't-ok');
-    show(info, usedBaud);
+
+    let envision = null;
+    if ($('envision').checked) {
+      try {
+        envision = await readEnvision(transport, info, (m) => log(m));
+        log(`Fast Server: ${envision.text}`);
+      } catch (e) {
+        log(`ESGe! failed: ${e.message}`, 't-err');
+      }
+    }
+
+    log($('envision').checked
+      ? 'Done. ESGv! and ESGi! wrote nothing; ESGe! was sent as requested.'
+      : 'Done — nothing was written to the mount.', 't-ok');
+    show(info, usedBaud, envision);
   } catch (e) {
     log(e.message, 't-err');
   } finally {
