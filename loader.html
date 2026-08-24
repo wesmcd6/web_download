@@ -72,6 +72,7 @@
        firmware</strong>, which makes this the safe way to exercise the whole
        bulk-transfer path against real hardware.</p>
     <button id="phase2" disabled>Load to RAM and run</button>
+    <span id="hint2" class="t-dim"></span>
     <progress id="prog" value="0" max="1" hidden></progress>
   </div>
 
@@ -87,6 +88,7 @@
       </label>
       <button id="phase3" class="danger" disabled>Write to EEPROM</button>
     </div>
+    <div id="hint3" class="t-dim" style="margin-top:.5rem"></div>
   </div>
 
   <div id="log"></div>
@@ -157,13 +159,32 @@ function setReady(on) {
   refreshWriteButtons();
 }
 
+/**
+ * Keep the write buttons in step with their preconditions AND say which one is
+ * missing. A greyed-out button with no explanation reads as a broken page —
+ * typing WRITE does nothing while no image is loaded, which looks like the
+ * arming box is refusing input.
+ */
 function refreshWriteButtons() {
-  const ok = !!port && !!image;
-  $('phase2').disabled = !ok;
-  $('phase3').disabled = !ok || $('arm').value.trim().toUpperCase() !== 'WRITE';
+  const armed = $('arm').value.trim().toUpperCase() === 'WRITE';
+  const blocker = !port ? 'Select a serial port in step 1.'
+                : !image ? 'Choose a firmware image in step 4.'
+                : null;
+
+  $('phase2').disabled = !!blocker;
+  $('hint2').textContent = blocker ?? '';
+
+  $('phase3').disabled = !!blocker || !armed;
+  $('hint3').textContent = blocker
+    ? blocker
+    : armed
+      ? 'Armed. This will overwrite the mount firmware permanently.'
+      : 'Type WRITE in the box to arm.';
+  $('hint3').className = blocker ? 't-dim' : (armed ? 't-err' : 't-dim');
 }
 
 $('arm').addEventListener('input', refreshWriteButtons);
+refreshWriteButtons();
 
 $('connect').addEventListener('click', async () => {
   try {
@@ -220,15 +241,19 @@ $('phase0').addEventListener('click', async () => {
       if (r.p9 !== null) log(`  splash reports Mount Type: P9 = ${r.p9}`);
     }
 
+    if (r.wifiLine) log(`  splash reports Wi-Fi module: ${r.wifiLine}`);
+
     if (r.versionConfirmed) {
-      log(`PHASE 0 OK — firmware answered ESGv!: ${r.firmware}`, 't-ok');
-      log('  Round trip confirmed: reset works and the firmware is running and ' +
-          'talking. Nothing was written.', 't-dim');
+      log(`PHASE 0 OK — ESGv! answered: ${r.firmware}`, 't-ok');
+      log(`  Round trip confirmed after ${r.versionAttempts} attempt(s): reset works, ` +
+          'the firmware is running and answering commands. Nothing was written.', 't-dim');
     } else if (r.firmware) {
-      log(`ESGv! did not answer (${r.versionError}), but the splash banner reads ` +
-          `${r.firmware}.`, 't-err');
+      log(`ESGv! never answered in ${r.versionAttempts} attempts (${r.versionError}).`, 't-err');
+      log(`  The banner below came from the boot splash text, NOT from ESGv! — ` +
+          `${r.firmware}. That proves reset works but not that the command ` +
+          'interpreter is answering.', 't-dim');
     } else {
-      log(`ESGv! did not answer: ${r.versionError}`, 't-err');
+      log(`ESGv! never answered in ${r.versionAttempts} attempts: ${r.versionError}`, 't-err');
     }
   } catch (e) {
     log(e.message, 't-err');

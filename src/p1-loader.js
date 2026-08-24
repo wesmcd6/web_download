@@ -200,9 +200,10 @@ export class P1Loader {
 export async function resetAndListen(transport, opts = {}) {
   const {
     maxSeconds = 25,
-    quietMs = 2000,
-    minSeconds = 3,
+    quietMs = 2500,
+    minSeconds = 5,
     askVersion = true,
+    versionWindowMs = 30000,
     onChunk = () => {},
     progress = () => {},
   } = opts;
@@ -237,30 +238,70 @@ export async function resetAndListen(transport, opts = {}) {
     }
   }
 
+  const result = {
+    splash: null, firmware: null, p9: null,
+    versionError: null, versionConfirmed: false, versionAttempts: 0,
+  };
+
+  /**
+   * Poll rather than guess when boot has finished.
+   *
+   * The spinner pauses for longer than any sane quiet threshold, so
+   * "the line went quiet" is not a reliable end-of-boot signal — it fires
+   * while the firmware is still inside SplashScreen, before the command
+   * interpreter runs, and ESGv! is simply ignored. Retrying until it answers
+   * is self-correcting and needs no estimate of how long boot takes.
+   */
+  if (askVersion) {
+    const vDeadline = Date.now() + versionWindowMs;
+    while (Date.now() < vDeadline) {
+      result.versionAttempts++;
+      const left = Math.ceil((vDeadline - Date.now()) / 1000);
+      progress(`ESGv! attempt ${result.versionAttempts} (${left}s left)…`);
+      let raw = '';
+      try {
+        raw = await ask(transport, 'ESGv!', { expect: 'ESGv', timeoutMs: 2000 });
+      } catch (e) {
+        result.versionError = e.message;
+      }
+      // Anything the mount said while we were asking is still boot output.
+      if (raw) {
+        const bytes = new Uint8Array(raw.length);
+        for (let i = 0; i < raw.length; i++) bytes[i] = raw.charCodeAt(i) & 0xff;
+        chunks.push(bytes);
+        total += bytes.length;
+      }
+      if (raw.includes('ESGv')) {
+        try {
+          result.firmware = parseESGv(raw);
+          result.versionConfirmed = true;
+          break;
+        } catch (e) {
+          result.versionError = e.message;
+        }
+      } else if (raw) {
+        result.versionError = 'no ESGv reply (mount still booting?)';
+      }
+      await sleep(700);
+    }
+  }
+
   const splash = new Uint8Array(total);
   let p = 0;
   for (const c of chunks) { splash.set(c, p); p += c.length; }
+  result.splash = splash;
 
-  const result = { splash, firmware: null, p9: null, versionError: null };
-
-  // Whatever the splash printed, read it back out of the text if it is there.
+  // Scrape the banner and P9 out of whatever text we ended up with. Useful
+  // even when ESGv! never answers.
   const text = new TextDecoder('latin1').decode(splash);
-  const banner = text.match(/ES20A02\.[0-9.]+\.bt[^\r\n=]*/);
-  if (banner) result.firmware = banner[0].trim();
+  if (!result.versionConfirmed) {
+    const banner = text.match(/ES20A02\.[0-9.]+\.bt[^\r\n=]*/);
+    if (banner) result.firmware = banner[0].trim();
+  }
   const p9 = text.match(/Mount Type:\s*P9\s*=\s*(\d+)/);
   if (p9) result.p9 = Number(p9[1]);
-
-  if (askVersion) {
-    progress('Asking the firmware for its version (ESGv!)…');
-    try {
-      const raw = await ask(transport, 'ESGv!', { expect: 'ESGv', timeoutMs: 3000 });
-      if (!raw.includes('ESGv')) throw new Error('no ESGv reply');
-      result.firmware = parseESGv(raw);
-      result.versionConfirmed = true;
-    } catch (e) {
-      result.versionError = e.message;
-    }
-  }
+  const wifi = text.match(/ESP-32 ver: *([^\r\n]*)|ESP-8266[^\r\n]*|RN-131/);
+  if (wifi) result.wifiLine = wifi[0].trim();
 
   return result;
 }
