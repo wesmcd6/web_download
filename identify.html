@@ -15,23 +15,14 @@
 
   <div class="card">
     <span class="badge safe">Read-only</span>
-    <p>This page sends exactly two commands, <code>ESGv!</code> and <code>ESGi!</code>.
-       Both are pure reads. Nothing is written, no setting is changed and no motor moves.</p>
+    <p>Reads the mount's configuration and both firmware versions — the mount's own
+       and the Wi-Fi module's. Nothing is written: no setting is changed and no
+       motor moves.</p>
     <p>Opening the port can make the mount reboot on its own, which takes 15–20&nbsp;seconds.
        If that happens this just keeps asking until it answers — leave it running.</p>
     <div class="row">
       <button id="go" class="primary">Connect and read settings</button>
     </div>
-    <div class="row" style="margin-top:.9rem">
-      <label><input type="checkbox" id="gmr" checked> also read the
-        <strong>ESP firmware</strong> version</label>
-    </div>
-    <p class="t-dim" style="margin:.5rem 0 0">Reading the ESP firmware needs
-       passthrough (<code>ESPw42!</code> … <code>###</code>), which briefly takes
-       the mount out of ES command mode. The exit is always sent and ES commands
-       are re-tested afterwards. Automatically skipped on RN-131, which is not an
-       AT-command device. Untick if the mount is tracking and you would rather
-       not interrupt it.</p>
   </div>
 
   <details class="card">
@@ -113,8 +104,7 @@ function show(info, baud, envision, esp) {
   // Always render the row. A missing ESP firmware line is information too —
   // silence just looks like the tool forgot.
   if (!esp) {
-    espFirmware = row('ESP firmware', 'Not read',
-                      'The ESP firmware option was switched off.');
+    espFirmware = row('ESP firmware', 'Not read');
   } else {
     const g = esp.gmr;
     if (esp.skipped) {
@@ -206,8 +196,10 @@ $('go').addEventListener('click', async () => {
       }
     }
 
+    // Always read the ESP firmware. readEspVersion skips RN-131 itself, so the
+    // only mounts that reach passthrough are the ones it applies to.
     let esp = null;
-    if ($('gmr').checked) {
+    {
       try {
         esp = await readEspVersion(transport, info, (m) => log(m));
       } catch (e) {
@@ -231,13 +223,7 @@ $('go').addEventListener('click', async () => {
       }
     }
 
-    const extras = [
-      $('envision').checked ? 'ESGe!' : null,
-      $('gmr').checked ? 'ESPw42!/AT+GMR/###' : null,
-    ].filter(Boolean);
-    log(extras.length
-      ? `Done. ESGv! and ESGi! wrote nothing; ${extras.join(' and ')} sent as requested.`
-      : 'Done — nothing was written to the mount.', 't-ok');
+    log('Done — nothing was written to the mount.', 't-ok');
     show(info, 115200, envision, esp);
   } catch (e) {
     log(e.message, 't-err');
