@@ -1,0 +1,30 @@
+# OS
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Editors
+.vs/
+.idea/
+*.swp
+
+# Build / deps
+bin/
+obj/
+node_modules/
+dist/
+build/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Local secrets / env
+.env
+.env.local
+*.local
+
+# Downloads / scratch output
+downloads/
+tmp/
+*.log
