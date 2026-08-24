@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PMC-Eight browser tools</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>PMC-Eight browser tools</h1>
+  <p class="sub">Talk to the mount over USB straight from the browser.
+     No install, no Python, no Terminal.</p>
+
+  <div id="support" class="notice" hidden></div>
+
+  <div class="cards">
+    <div class="card">
+      <span class="badge safe">Read-only</span>
+      <h3>Identify my mount</h3>
+      <p>Plug in USB, click once. The mount reports its model, firmware version and
+         which Wi-Fi module is fitted — so you never have to work that out yourself.</p>
+      <a href="identify.html"><button class="primary">Open</button></a>
+    </div>
+
+    <div class="card">
+      <span class="badge permanent">Can write firmware</span>
+      <h3>Firmware loader</h3>
+      <p>Loads Propeller (P1) mount firmware over USB. Staged: handshake and RAM
+         loads are safe or reversible; the EEPROM write is not.</p>
+      <a href="loader.html"><button>Open</button></a>
+    </div>
+  </div>
+
+  <h2>Before you start</h2>
+  <div class="card">
+    <ul style="margin:0;padding-left:1.1rem;color:var(--muted)">
+      <li>Use <strong>desktop Chrome, Edge or Opera</strong>. Firefox, Safari, iOS and
+          Android Chrome have no Web Serial API.</li>
+      <li>Close UFCT, the PMC8 Dashboard and any other serial tool first — Windows will
+          not share the COM port.</li>
+      <li>Power the mount and use the <em>data</em> USB cable, not a charge-only one.</li>
+      <li>This is the <strong>Propeller</strong>, the mount's brain. The Wi-Fi module is a
+          separate processor updated a different way.</li>
+    </ul>
+  </div>
+
+  <h2>What actually happens</h2>
+  <div class="card">
+    <p style="margin:0">The page and firmware image are downloaded once over HTTPS. After
+    that the whole session is local — browser to USB driver to mount. You could unplug
+    the network mid-flash and it would still finish.</p>
+  </div>
+</main>
+
+<script type="module">
+import { isSupported, unsupportedReason } from './src/p1-serial.js';
+const el = document.getElementById('support');
+const reason = (!isSupported() || !window.isSecureContext) ? unsupportedReason() : null;
+if (reason) { el.hidden = false; el.classList.add('bad'); el.textContent = reason; }
+</script>
+</body>
+</html>

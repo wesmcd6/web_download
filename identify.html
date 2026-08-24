@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Identify my PMC-Eight</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main>
+  <h1>Identify my PMC-Eight</h1>
+  <p class="sub">Plug in the USB cable, click once, and the mount tells you what it is —
+     model, firmware version, and which Wi-Fi module is fitted.</p>
+
+  <div class="card">
+    <span class="badge safe">Read-only</span>
+    <p>This page sends exactly two commands, <code>ESGv!</code> and <code>ESGi!</code>.
+       Both are pure reads. Nothing is written, no setting is changed, no motor moves,
+       and the mount is never reset.</p>
+    <div class="row">
+      <button id="go" class="primary">Connect and identify</button>
+      <label><input type="checkbox" id="sweep"> try all baud rates</label>
+    </div>
+  </div>
+
+  <div id="unsupported" class="notice bad" hidden></div>
+  <div id="result" hidden></div>
+  <div id="log" hidden></div>
+</main>
+
+<script type="module">
+import { SerialTransport, requestPort, isSupported, unsupportedReason } from './src/p1-serial.js';
+import { identify, BAUD_RATES } from './src/pmc8-identify.js';
+
+const $ = (id) => document.getElementById(id);
+const logEl = $('log');
+
+function log(msg, cls = '') {
+  logEl.hidden = false;
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = msg;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+if (!isSupported() || !window.isSecureContext) {
+  const el = $('unsupported');
+  el.hidden = false;
+  el.textContent = unsupportedReason() ?? 'Web Serial is unavailable.';
+  $('go').disabled = true;
+}
+
+function row(k, v, extra) {
+  return `<tr><th>${k}</th><td class="val">${v}${
+    extra ? `<br><span class="t-dim">${extra}</span>` : ''}</td></tr>`;
+}
+
+function show(info, baud) {
+  const el = $('result');
+  el.hidden = false;
+  el.innerHTML = `
+    <div class="card">
+      <h3>Your mount</h3>
+      <table>
+        ${row('Mount model', info.model,
+              [info.modelNote,
+               info.modelAmbiguous
+                 ? 'P9 is 0. The firmware never range-corrects P9, so a corrupted ' +
+                   'setting looks identical to a genuine iEXOS-100 here.'
+                 : null].filter(Boolean).join(' — ') || null)}
+        ${row('Firmware', info.firmware)}
+        ${row('Wi-Fi module', info.wifi, info.wifiCaveat)}
+        ${row('Serial baud', `${info.baud}${baud && baud !== info.baud ? ` (connected at ${baud})` : ''}`)}
+        ${row('Hemisphere', info.hemisphere)}
+        ${row('Wi-Fi channel', info.wifiChannel)}
+        ${row('Protocol', info.tcpip ? 'TCP/IP' : 'UDP/IP')}
+        ${row('Motor current', `slew ${info.slewCurrentMa} mA / track ${info.trackCurrentMa} mA`)}
+        ${row('Guide rate (% sidereal)', `RA ${info.guideRateRA} / Dec ${info.guideRateDec}`)}
+        ${row('ST4', info.st4Disabled ? 'disabled' : (info.st4Analog ? 'analog' : 'digital'))}
+        ${row('Raw ESGi', info.raw)}
+      </table>
+      <p class="t-dim" style="margin-top:.9rem">
+        Copy this block into a support message and nobody has to ask you which
+        module you have.</p>
+    </div>`;
+}
+
+$('go').addEventListener('click', async () => {
+  $('go').disabled = true;
+  $('result').hidden = true;
+  logEl.innerHTML = '';
+  let transport = null;
+  try {
+    const port = await requestPort();
+    const rates = $('sweep').checked ? BAUD_RATES : [115200];
+    let info = null, usedBaud = null;
+
+    for (const baud of rates) {
+      if (rates.length > 1) log(`Trying ${baud} baud…`, 't-dim');
+      transport = new SerialTransport(port, { baudRate: baud, log });
+      await transport.open();
+      try {
+        info = await identify(transport, (m) => log(m));
+        usedBaud = baud;
+        break;
+      } catch (e) {
+        log(`  ${e.message}`, 't-dim');
+        await transport.close();
+        transport = null;
+      }
+    }
+
+    if (!info) throw new Error('The mount did not answer. Nothing was changed.');
+    log('Done — nothing was written to the mount.', 't-ok');
+    show(info, usedBaud);
+  } catch (e) {
+    log(e.message, 't-err');
+  } finally {
+    if (transport) await transport.close();
+    $('go').disabled = false;
+  }
+});
+</script>
+</body>
+</html>
