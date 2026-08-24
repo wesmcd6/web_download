@@ -116,6 +116,16 @@ function show(info, baud, envision, esp) {
                     g.esBranded
                       ? 'ES-branded build — this is what the mount matches on.'
                       : 'Not ES-branded; the mount would report this module as type 1.');
+      if (g.tag) {
+        module += row(
+          'Module hardware',
+          g.module ? `${g.module}  (${g.tag})` : `Unrecognized  (${g.tag})`,
+          g.module
+            ? (g.moduleConfirmed
+                ? 'Read straight off the module, not inferred by the mount.'
+                : 'Mapped from the tag but not yet seen on real hardware here.')
+            : 'The tag did not match a known module — please report it.');
+      }
     }
     if (g.at) module += row('Module AT version', g.at);
     if (g.sdk) module += row('Module SDK version', g.sdk);
@@ -149,6 +159,9 @@ function show(info, baud, envision, esp) {
     for (const r of settingsRows(info)) lines.push(`${r.label}: ${r.value}`);
     if (envision) lines.push(`Fast Server (Envision): ${envision.text}`);
     if (esp?.gmr?.bin) lines.push(`Module bin version: ${esp.gmr.bin}`);
+    if (esp?.gmr?.tag) {
+      lines.push(`Module hardware: ${esp.gmr.module ?? 'unrecognized'} (${esp.gmr.tag})`);
+    }
     if (esp?.gmr?.at) lines.push(`Module AT version: ${esp.gmr.at}`);
     lines.push(`Raw ESGi: ${info.raw}`);
     navigator.clipboard.writeText(lines.join('\n'));
@@ -183,7 +196,14 @@ $('go').addEventListener('click', async () => {
       esp = await readEspVersion(transport, info, (m) => log(m));
       if (esp.skipped) log(`Module version skipped: ${esp.reason}`, 't-dim');
       else if (esp.error) log(`AT+GMR: ${esp.error}`, 't-err');
-      else log(`Module bin version: ${esp.gmr?.bin ?? '(unknown)'}`, 't-ok');
+      else {
+        log(`Module bin version: ${esp.gmr?.bin ?? '(unknown)'}`, 't-ok');
+        if (esp.gmr?.tag) {
+          log(`  hardware tag ${esp.gmr.tag} → ` +
+              `${esp.gmr.module ?? 'unrecognized module'}`, 't-ok');
+        }
+      }
+      if (esp.rawGmr) log(`  raw AT+GMR:\n${esp.rawGmr}`, 't-dim');
       if (esp.entered && !esp.exited) {
         log('WARNING: no exit confirmation from passthrough. If the mount stops ' +
             'answering ES commands, power-cycle it.', 't-err');

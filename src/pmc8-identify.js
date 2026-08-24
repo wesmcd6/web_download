@@ -202,6 +202,30 @@ export async function readEnvision(transport, cfg, log = () => {}) {
 }
 
 /**
+ * Identify the silicon from the Bin version line's parenthetical tag.
+ *
+ *   Bin version:ES4.2.30(WROOM-32)   -> ESP32
+ *
+ * This is the most direct answer available: the module states what it is,
+ * rather than the mount inferring it. ESGi!'s `w` field only distinguishes
+ * "answered AT with an ES-branded GMR" from "answered but not ES-branded",
+ * so a stock-firmware ESP32 reads there as an ESP8266. The tag does not have
+ * that failure mode.
+ */
+export function moduleFromBin(bin) {
+  if (!bin) return { tag: null, module: null, moduleConfirmed: false };
+  const m = bin.match(/\(([^)]+)\)/);
+  const tag = m ? m[1].trim() : null;
+  if (!tag) return { tag: null, module: null, moduleConfirmed: false };
+
+  if (/WROOM-?32/i.test(tag)) return { tag, module: 'ESP32', moduleConfirmed: true };
+  // Espressif's ESP8266 AT module is WROOM-02. Not yet seen on a real mount
+  // here, so it is reported but not claimed as confirmed.
+  if (/WROOM-?0?2\b/i.test(tag)) return { tag, module: 'ESP8266', moduleConfirmed: false };
+  return { tag, module: null, moduleConfirmed: false };
+}
+
+/**
  * Parse an AT+GMR response, e.g.
  *
  *   AT version:2.2.0.0(s-ab8f5f8 - ESP32 - Jul 28 2021 07:05:28)
@@ -211,14 +235,30 @@ export async function readEnvision(transport, cfg, log = () => {}) {
  *   OK
  */
 export function parseGmr(reply) {
-  const s = typeof reply === 'string' ? reply : DEC.decode(reply);
-  const grab = (re) => { const m = s.match(re); return m ? m[1].trim() : null; };
-  const bin = grab(/Bin version:\s*([^\r\n]+)/i);
+  const s = (typeof reply === 'string' ? reply : DEC.decode(reply)).replace(/\r/g, '');
+
+  // Values can WRAP across lines — real output has
+  //   AT version:4.2.0.0-dev(bbccb5e - ESP32 - Feb
+  //     9 2026 02:41:25)
+  // so a field runs until the next known key, not until the next newline.
+  const NEXT_KEY = /\n\s*(?:AT version:|SDK version:|compile time|Bin version:|OK\b|ERROR\b)/i;
+
+  const grab = (keyRe) => {
+    const m = keyRe.exec(s);
+    if (!m) return null;
+    const rest = s.slice(m.index + m[0].length);
+    const stop = rest.search(NEXT_KEY);
+    const chunk = stop >= 0 ? rest.slice(0, stop) : rest;
+    return chunk.replace(/\s+/g, ' ').trim() || null;
+  };
+
+  const bin = grab(/Bin version:/i);
   return {
-    at: grab(/AT version:\s*([^\r\n]+)/i),
-    sdk: grab(/SDK version:\s*([^\r\n]+)/i),
-    compileTime: grab(/compile time[^:]*:\s*([^\r\n]+)/i),
+    at: grab(/AT version:/i),
+    sdk: grab(/SDK version:/i),
+    compileTime: grab(/compile time[^:\n]*:/i),
     bin,
+    ...moduleFromBin(bin),
     // The firmware's own ESP32 test is literally the byte pair "ES" in the
     // AT+GMR output — the ES branding, not the "WROOM-32" chip name.
     esBranded: bin ? /^ES/i.test(bin) : false,
@@ -256,37 +296,46 @@ export async function readEspVersion(transport, cfg, log = () => {}) {
     // The module usually ignores the first few AT probes; the firmware's own
     // detection sends AT twice and notes the first often returns ERROR.
     let ready = false;
-    for (let i = 1; i <= 12 && !ready; i++) {
-      log(`  AT probe ${i}…`);
+    for (let i = 1; i <= 6 && !ready; i++) {
       transport.flush();
       await transport.tx(ENC.encode('AT\r\n'));
-      const deadline = Date.now() + 800;
+      const deadline = Date.now() + 600;
       let acc = '';
       while (Date.now() < deadline) {
         const d = await transport.rxTimeout(256, Math.max(50, deadline - Date.now()));
         if (d.length) acc += DEC.decode(d);
         if (/\bOK\b/.test(acc)) { ready = true; break; }
       }
-      if (!ready) await sleep(250);
+      log(`  AT probe ${i}: ${ready ? 'OK' : (acc.trim() ? JSON.stringify(acc.trim()) : 'no reply')}`);
+      if (!ready) await sleep(200);
     }
 
-    if (!ready) {
-      result.error = 'The module never answered AT with OK.';
-      return result;
-    }
-    log('  module answered OK — sending AT+GMR');
+    // Send AT+GMR even without an OK. A missing OK is not proof the module is
+    // deaf, and the version query is the only thing we came here for.
+    if (!ready) log('  no OK from AT — trying AT+GMR anyway');
 
     transport.flush();
     await transport.tx(ENC.encode('AT+GMR\r\n'));
-    const deadline = Date.now() + 3000;
+
+    // Stop on the last expected field rather than on OK: the reply arrives in
+    // fragments (128-byte rings), spans blank lines, and OK may not appear.
+    const deadline = Date.now() + 4000;
     let acc = '';
+    let lastByteAt = Date.now();
     while (Date.now() < deadline) {
-      const d = await transport.rxTimeout(512, Math.max(50, deadline - Date.now()));
-      if (d.length) acc += DEC.decode(d);
-      if (/\bOK\b/.test(acc) && /version/i.test(acc)) break;
+      const d = await transport.rxTimeout(512, Math.max(50, Math.min(300, deadline - Date.now())));
+      if (d.length) { acc += DEC.decode(d); lastByteAt = Date.now(); }
+      if (/Bin version:/i.test(acc) && Date.now() - lastByteAt > 250) break;
+      if (/\bERROR\b/.test(acc)) break;
+      if (acc && Date.now() - lastByteAt > 900) break;   // gone quiet
     }
+    result.rawGmr = acc.replace(/\r/g, '').trim();
     result.gmr = parseGmr(acc);
-    if (!result.gmr.at && !result.gmr.bin) result.error = 'AT+GMR returned nothing usable.';
+    if (!result.gmr.at && !result.gmr.bin) {
+      result.error = acc.trim()
+        ? `AT+GMR returned nothing usable: ${JSON.stringify(result.rawGmr.slice(0, 200))}`
+        : 'AT+GMR returned nothing at all.';
+    }
   } finally {
     // Always leave passthrough, whatever happened above.
     log('Leaving passthrough (###)…');
