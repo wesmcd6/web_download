@@ -118,18 +118,26 @@ export function parseESGv(reply) {
   return s.slice(i + 4, end).replace(/[\r\n\0]/g, '').trim();
 }
 
-/** Send one command and collect the reply up to '!' (or until quiet). */
-export async function ask(transport, cmd, { timeoutMs = 1500, want = '!' } = {}) {
+/**
+ * Send one command and collect the reply.
+ *
+ * `expect` is the reply's leading token. We stop only once we have seen that
+ * token AND a '!' after it — not merely any '!'. That matters because a mount
+ * still printing its boot splash and spinner is emitting unrelated bytes
+ * (including the '!' in "BT ON!") around our reply.
+ */
+export async function ask(transport, cmd, { timeoutMs = 2000, expect = null } = {}) {
   transport.flush();
   await transport.tx(ENC.encode(cmd));
   const deadline = Date.now() + timeoutMs;
   let acc = '';
   while (Date.now() < deadline) {
     const data = await transport.rxTimeout(256, Math.max(50, deadline - Date.now()));
-    if (data.length) {
-      acc += DEC.decode(data);
-      if (want && acc.includes(want) && acc.indexOf(want) > 3) break;
-    }
+    if (!data.length) continue;
+    acc += DEC.decode(data);
+    if (!expect) { if (acc.includes('!')) break; continue; }
+    const i = acc.indexOf(expect);
+    if (i >= 0 && acc.indexOf('!', i + expect.length) >= 0) break;
   }
   return acc;
 }
@@ -140,7 +148,7 @@ export async function ask(transport, cmd, { timeoutMs = 1500, want = '!' } = {})
  */
 export async function identify(transport, log = () => {}) {
   log('Asking the mount for its firmware version (ESGv!)…');
-  const vRaw = await ask(transport, 'ESGv!');
+  const vRaw = await ask(transport, 'ESGv!', { expect: 'ESGv' });
   if (!vRaw.trim()) {
     throw new Error(
       'No reply to ESGv!. Check the mount is powered and the cable is the ' +
@@ -151,7 +159,7 @@ export async function identify(transport, log = () => {}) {
   log(`Firmware: ${firmware}`);
 
   log('Asking the mount for its configuration (ESGi!)…');
-  const iRaw = await ask(transport, 'ESGi!');
+  const iRaw = await ask(transport, 'ESGi!', { expect: 'ESGi' });
   const cfg = parseESGi(iRaw);
   log(`Model: ${cfg.model}   Wi-Fi module: ${cfg.wifi}`);
 
@@ -167,7 +175,7 @@ export async function autoBaud(makeTransport, log = () => {}) {
     log(`Trying ${baud} baud…`);
     const t = await makeTransport(baud);
     try {
-      const reply = await ask(t, 'ESGv!', { timeoutMs: 900 });
+      const reply = await ask(t, 'ESGv!', { timeoutMs: 1200, expect: 'ESGv' });
       if (reply.includes('ESGv')) { log(`Answered at ${baud}.`); return { transport: t, baud }; }
     } catch { /* fall through to next rate */ }
     await t.close();

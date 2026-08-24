@@ -16,6 +16,7 @@ import {
   assembleVersion, buildHandshake, buildPayload, estimateSeconds,
 } from './p1-protocol.js';
 import { sleep } from './p1-serial.js';
+import { ask, parseESGv } from './pmc8-identify.js';
 
 export class LoaderError extends Error {
   constructor(msg) { super(msg); this.name = 'LoaderError'; }
@@ -40,7 +41,35 @@ export class P1Loader {
    * polarity, the LFSR, and that the timing window is reachable from a
    * browser. Returns the chip version (1 for a P1).
    */
-  async handshake() {
+  /**
+   * Handshake, retrying on failure.
+   *
+   * A single attempt is fragile in a way that has nothing to do with the
+   * protocol: a transient serial read error (e.g. "Buffer overrun") drops the
+   * reader mid-sequence, and the handshake then reports a timeout at whatever
+   * bit it had reached. Each attempt re-pulses reset, so retrying is clean.
+   */
+  async handshake({ attempts = 3 } = {}) {
+    let lastErr;
+    for (let a = 1; a <= attempts; a++) {
+      const errsBefore = this.t.readErrors ?? 0;
+      try {
+        return await this._handshakeOnce();
+      } catch (e) {
+        lastErr = e;
+        const hadReadError = (this.t.readErrors ?? 0) > errsBefore;
+        if (a < attempts) {
+          this._report(
+            `attempt ${a} failed (${e.message})` +
+            `${hadReadError ? ' after a serial read error' : ''} — retrying`);
+          await sleep(300);
+        }
+      }
+    }
+    throw lastErr;
+  }
+
+  async _handshakeOnce() {
     this._rxbuf = new Uint8Array(0);
     this._rxnext = 0;
 
@@ -153,24 +182,85 @@ export class P1Loader {
 }
 
 /**
- * Phase 0 — reset and listen. Writes nothing, not even handshake bytes.
+ * Phase 0 — reset, wait out the boot, then ask the firmware its version.
  *
  * Normal firmware prints a long ASCII boot splash after reset (banner,
  * settings, "Mount Type: P9 = n", and the Wi-Fi module name), so SILENCE HERE
- * IS A SYMPTOM, not an expected outcome. Allow several seconds: the splash
- * itself waits ~2s for the Wi-Fi module, plus up to ~4s of AT polling.
+ * IS A SYMPTOM, not an expected outcome.
+ *
+ * A full reset can take 15-20 seconds: the splash embeds a 2s Wi-Fi settle
+ * plus AT polling, and the mount keeps printing a "\ / | -" spinner while it
+ * initialises the ESP module. So we wait for the line to fall quiet rather
+ * than for a fixed delay, then send ESGv!. Getting a parsed version back is a
+ * positive confirmation the round trip works — much stronger evidence than
+ * "some bytes came out".
+ *
+ * Still writes nothing that changes the mount: ESGv! is a pure read.
  */
-export async function resetAndListen(transport, seconds = 8, onChunk = () => {}) {
+export async function resetAndListen(transport, opts = {}) {
+  const {
+    maxSeconds = 25,
+    quietMs = 2000,
+    minSeconds = 3,
+    askVersion = true,
+    onChunk = () => {},
+    progress = () => {},
+  } = opts;
+
+  progress('Pulsing reset…');
   await transport.reset();
-  const deadline = Date.now() + seconds * 1000;
+
+  const start = Date.now();
+  const deadline = start + maxSeconds * 1000;
   const chunks = [];
   let total = 0;
+  let lastData = Date.now();
+  let announced = false;
+
   while (Date.now() < deadline) {
-    const data = await transport.rxTimeout(4096, Math.max(50, deadline - Date.now()));
-    if (data.length) { chunks.push(data); total += data.length; onChunk(data); }
+    const remain = deadline - Date.now();
+    const data = await transport.rxTimeout(4096, Math.min(300, Math.max(50, remain)));
+    if (data.length) {
+      chunks.push(data);
+      total += data.length;
+      lastData = Date.now();
+      onChunk(data);
+      if (!announced) {
+        announced = true;
+        progress('Boot output started — waiting for it to finish…');
+      }
+    } else if (total > 0 &&
+               Date.now() - lastData > quietMs &&
+               Date.now() - start > minSeconds * 1000) {
+      progress(`Line quiet after ${((Date.now() - start) / 1000).toFixed(1)}s.`);
+      break;
+    }
   }
-  const all = new Uint8Array(total);
+
+  const splash = new Uint8Array(total);
   let p = 0;
-  for (const c of chunks) { all.set(c, p); p += c.length; }
-  return all;
+  for (const c of chunks) { splash.set(c, p); p += c.length; }
+
+  const result = { splash, firmware: null, p9: null, versionError: null };
+
+  // Whatever the splash printed, read it back out of the text if it is there.
+  const text = new TextDecoder('latin1').decode(splash);
+  const banner = text.match(/ES20A02\.[0-9.]+\.bt[^\r\n=]*/);
+  if (banner) result.firmware = banner[0].trim();
+  const p9 = text.match(/Mount Type:\s*P9\s*=\s*(\d+)/);
+  if (p9) result.p9 = Number(p9[1]);
+
+  if (askVersion) {
+    progress('Asking the firmware for its version (ESGv!)…');
+    try {
+      const raw = await ask(transport, 'ESGv!', { expect: 'ESGv', timeoutMs: 3000 });
+      if (!raw.includes('ESGv')) throw new Error('no ESGv reply');
+      result.firmware = parseESGv(raw);
+      result.versionConfirmed = true;
+    } catch (e) {
+      result.versionError = e.message;
+    }
+  }
+
+  return result;
 }

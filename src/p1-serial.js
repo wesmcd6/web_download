@@ -50,6 +50,12 @@ export class SerialTransport {
     this.settleMs = opts.settleMs ?? POST_RESET_MS;
     this.log = opts.log ?? (() => {});
 
+    // Chrome's default is only 255 bytes. The mount can stream a long boot
+    // splash plus a continuous spinner, and if the renderer pipe backs up the
+    // browser stops draining the OS buffer, which is what produces
+    // "Buffer overrun". A roomy pipe makes that far less likely.
+    this.bufferSize = opts.bufferSize ?? 262144;
+
     this._reader = null;
     this._writer = null;
     this._buf = [];        // queue of Uint8Array chunks
@@ -57,6 +63,7 @@ export class SerialTransport {
     this._wake = null;     // resolver for a pending read
     this._pump = null;
     this._closed = false;
+    this.readErrors = 0;
   }
 
   async open() {
@@ -66,7 +73,7 @@ export class SerialTransport {
       stopBits: 1,
       parity: 'none',
       flowControl: 'none',
-      bufferSize: 65536,
+      bufferSize: this.bufferSize,
     });
 
     // SerialOptions has no DTR field and the state after open() is not
@@ -81,21 +88,47 @@ export class SerialTransport {
     this.flush();
   }
 
+  /**
+   * Continuously drain the port into `_buf`.
+   *
+   * A serial read can fail non-fatally — "Buffer overrun" (the OS/FTDI receive
+   * buffer overflowed), parity, framing, break. When that happens Chrome
+   * errors the current ReadableStream and publishes a NEW `port.readable`.
+   * The reader must be re-acquired or the session goes permanently deaf: the
+   * symptom is a phase that reads a byte or two and then times out for no
+   * apparent reason.
+   *
+   * So this is a loop over readers, not a loop over reads.
+   */
   _startPump() {
-    this._reader = this.port.readable.getReader();
     this._pump = (async () => {
-      try {
-        for (;;) {
-          const { value, done } = await this._reader.read();
-          if (done) break;
-          if (value && value.length) {
-            this._buf.push(value);
-            this._bufLen += value.length;
-            if (this._wake) { const w = this._wake; this._wake = null; w(); }
-          }
+      while (!this._closed && this.port.readable) {
+        let reader;
+        try {
+          reader = this.port.readable.getReader();
+        } catch {
+          break;                      // someone else holds the lock
         }
-      } catch (e) {
-        if (!this._closed) this.log(`read error: ${e.message}`);
+        this._reader = reader;
+        try {
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            if (value && value.length) {
+              this._buf.push(value);
+              this._bufLen += value.length;
+              if (this._wake) { const w = this._wake; this._wake = null; w(); }
+            }
+          }
+        } catch (e) {
+          if (this._closed) break;
+          this.readErrors++;
+          this.log(`read error: ${e.message} — reattaching reader`);
+        } finally {
+          try { reader.releaseLock(); } catch { /* stream already gone */ }
+          this._reader = null;
+        }
+        if (!this._closed) await sleep(0);   // let Chrome publish the new stream
       }
     })();
   }
@@ -170,7 +203,6 @@ export class SerialTransport {
   async close() {
     this._closed = true;
     try { await this._reader?.cancel(); } catch { /* already gone */ }
-    try { this._reader?.releaseLock(); } catch { /* already released */ }
     try { await this._pump; } catch { /* pump already unwound */ }
     try { await this._writer?.close(); } catch { /* already closed */ }
     try { this._writer?.releaseLock(); } catch { /* already released */ }

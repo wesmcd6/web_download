@@ -145,3 +145,9 @@ Work down this list in order.
    38400, 57600, 115200.
 4. **Timeout partway through the 250 echo bits.** A stall in the response
    stream — the settle delay may be too short, so the chip was still booting.
+5. **`read error: Buffer overrun` anywhere in the log.** The OS/FTDI receive
+   buffer overflowed. On its own this is non-fatal and the transport
+   reattaches, but any phase running at that moment will report a bogus
+   timeout at whatever bit it had reached. Re-run it. If it recurs constantly,
+   the mount is streaming continuously — check whether it is stuck in
+   "Initializing ESP Module..." with the spinner running.

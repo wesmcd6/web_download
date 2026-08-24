@@ -38,12 +38,14 @@
 
   <div class="card">
     <span class="badge safe">Writes nothing</span>
-    <h3>2 · Phase 0 — reset and listen</h3>
-    <p>Pulses reset and prints whatever the mount says. Normal firmware emits a long
-       ASCII boot splash including <code>Mount Type: P9 = n</code> and the Wi-Fi module
-       name, so <strong>silence here is a symptom, not a pass</strong>. Allow several
-       seconds — the splash itself waits on the Wi-Fi module.</p>
-    <button id="phase0" disabled>Reset and listen (8s)</button>
+    <h3>2 · Phase 0 — reset, listen, then ask the version</h3>
+    <p>Pulses reset, waits for the boot output to finish, then sends <code>ESGv!</code>
+       and parses the reply. Normal firmware emits a long ASCII splash including
+       <code>Mount Type: P9 = n</code> and the Wi-Fi module name, so
+       <strong>silence here is a symptom, not a pass</strong>. A full reset can take
+       15–20&nbsp;seconds; this waits for the line to fall quiet rather than for a fixed
+       delay. <code>ESGv!</code> is a pure read — nothing is written.</p>
+    <button id="phase0" disabled>Reset, then read version</button>
   </div>
 
   <div class="card">
@@ -203,21 +205,36 @@ $('file').addEventListener('change', async (ev) => {
 });
 
 $('phase0').addEventListener('click', async () => {
+  $('phase0').disabled = true;
   try {
     const t = await ensureOpen();
-    log('Phase 0 — reset and listen…');
-    const data = await resetAndListen(t, 8);
-    if (!data.length) {
+    log('Phase 0 — reset, wait for boot, then ESGv!…');
+    const r = await resetAndListen(t, { progress: (m) => log(`  ${m}`) });
+
+    if (!r.splash.length) {
       log('SILENT. Normal firmware prints a boot splash, so this points at wrong ' +
           'reset line/polarity, wrong baud, or the port being held elsewhere.', 't-err');
     } else {
-      log(`${data.length} bytes received:`, 't-ok');
-      log(hexdump(data));
+      log(`${r.splash.length} bytes of boot output:`, 't-ok');
+      log(hexdump(r.splash));
+      if (r.p9 !== null) log(`  splash reports Mount Type: P9 = ${r.p9}`);
+    }
+
+    if (r.versionConfirmed) {
+      log(`PHASE 0 OK — firmware answered ESGv!: ${r.firmware}`, 't-ok');
+      log('  Round trip confirmed: reset works and the firmware is running and ' +
+          'talking. Nothing was written.', 't-dim');
+    } else if (r.firmware) {
+      log(`ESGv! did not answer (${r.versionError}), but the splash banner reads ` +
+          `${r.firmware}.`, 't-err');
+    } else {
+      log(`ESGv! did not answer: ${r.versionError}`, 't-err');
     }
   } catch (e) {
     log(e.message, 't-err');
   } finally {
     await transport?.close(); transport = null;
+    $('phase0').disabled = false;
   }
 });
 
