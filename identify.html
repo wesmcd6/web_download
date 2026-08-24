@@ -8,16 +8,17 @@
 </head>
 <body>
 <main>
-  <h1>Identify my PMC-Eight</h1>
+  <h1>PMC-Eight settings</h1>
   <p class="sub">Plug in the USB cable, click once, and the mount tells you what it is —
-     model, firmware version, and which Wi-Fi module is fitted.
+     model, both firmware versions, and every stored setting. Then change them.
      &nbsp;·&nbsp; <a href="./">← Firmware loader</a></p>
 
   <div class="card">
-    <span class="badge safe">Read-only</span>
+    <span class="badge safe">Reading changes nothing</span>
     <p>Reads the mount's configuration and both firmware versions — the mount's own
-       and the Wi-Fi module's. Nothing is written: no setting is changed and no
-       motor moves.</p>
+       and the Wi-Fi module's. Reading changes nothing and moves no motor.</p>
+    <p>Once read, the settings become editable. Saving writes them to the mount's
+       EEPROM, and asks first.</p>
     <p>Opening the port can make the mount reboot on its own, which takes 15–20&nbsp;seconds.
        If that happens this just keeps asking until it answers — leave it running.</p>
     <div class="row">
@@ -37,6 +38,10 @@ import { SerialTransport, requestPort, isSupported, unsupportedReason } from './
 import {
   identify, settingsRows, readEnvision, readEspVersion,
 } from './src/pmc8-identify.js';
+import {
+  EDITABLE_FIELDS, READ_ONLY_FIELDS, currentValues, changedFields,
+  buildESSi, displayValue, writeSettings,
+} from './src/pmc8-settings.js';
 
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
@@ -65,13 +70,40 @@ function row(k, v, extra) {
     extra ? `<br><span class="t-dim">${esc(extra)}</span>` : ''}</td></tr>`;
 }
 
+const INPUT_STYLE = 'font:inherit;background:var(--panel-2);color:var(--ink);' +
+                    'border:1px solid var(--line);border-radius:6px;padding:.3rem .45rem;';
+
+/** The twelve ESSi-writable fields, as inputs. */
+function editableRows(cfg) {
+  const now = currentValues(cfg);
+  return EDITABLE_FIELDS.map((f) => {
+    const v = now[f.key];
+    const control = f.kind === 'select'
+      ? `<select id="f_${f.key}" data-key="${f.key}" style="${INPUT_STYLE}">${
+          f.options.map((o) =>
+            `<option value="${o.value}"${Number(o.value) === Number(v) ? ' selected' : ''}>${
+              esc(o.label)}</option>`).join('')}</select>`
+      : `<input id="f_${f.key}" data-key="${f.key}" type="number" inputmode="numeric"
+              min="${f.min}" max="${f.max}" value="${esc(v)}" style="${INPUT_STYLE}width:7rem">`;
+    const note = f.key === 'p9' ? `P9 = ${cfg.p9}` : (f.warn ? null : null);
+    return `<tr><th>${esc(f.label)}</th><td class="val">${control}${
+      note ? `<br><span class="t-dim">${esc(note)}</span>` : ''}</td></tr>`;
+  }).join('\n        ');
+}
+
+/** In ESGi! but not accepted by ESSi!, so shown but not editable. */
+function readOnlyRows(cfg) {
+  return READ_ONLY_FIELDS.map((f) => {
+    const value = f.key === 'st4Analog'
+      ? (cfg.st4Analog ? 'Analog' : 'Digital')
+      : cfg.wifi;
+    return row(f.label, value, f.reason);
+  }).join('\n        ');
+}
+
 function show(info, baud, envision, esp) {
   const el = $('result');
   el.hidden = false;
-
-  const rows = settingsRows(info)
-    .map((r) => row(r.label, r.value, r.note))
-    .join('\n        ');
 
   const connNote = baud && baud !== info.baud
     ? row('Connected at', `${baud} baud`,
@@ -131,18 +163,26 @@ function show(info, baud, envision, esp) {
         ${row('Mount firmware', info.firmware)}
         ${espFirmware}
         ${moduleHw}
-        ${rows}
+        ${editableRows(info)}
+        ${readOnlyRows(info)}
         ${fast}
         ${moduleDetail}
         ${connNote}
         ${row('Raw ESGi', info.raw)}
       </table>
       <div class="row" style="margin-top:1rem">
+        <button id="save" class="danger" disabled>Save to mount</button>
+        <span id="savehint" class="t-dim">Change a value to enable saving.</span>
+      </div>
+      <div id="savelog" style="margin-top:.6rem"></div>
+      <div class="row" style="margin-top:1rem">
         <button id="copycfg">Copy as text</button>
         <span class="t-dim">Paste this into a support message and nobody has to
           ask you which module you have.</span>
       </div>
     </div>`;
+
+  wireEditor(info);
 
   $('copycfg').addEventListener('click', () => {
     const lines = [`Mount firmware: ${info.firmware}`];
@@ -159,6 +199,99 @@ function show(info, baud, envision, esp) {
     navigator.clipboard.writeText(lines.join('\n'));
     $('copycfg').textContent = 'Copied';
     setTimeout(() => { $('copycfg').textContent = 'Copy as text'; }, 1500);
+  });
+}
+
+/** Read the form back into a {key: value} map. */
+function formValues() {
+  const out = {};
+  for (const f of EDITABLE_FIELDS) out[f.key] = $(`f_${f.key}`).value;
+  return out;
+}
+
+function wireEditor(cfg) {
+  const save = $('save');
+  const hint = $('savehint');
+
+  const refresh = () => {
+    let diff;
+    try {
+      diff = changedFields(cfg, formValues());
+      buildESSi(formValues());        // validate before offering to send
+    } catch (e) {
+      save.disabled = true;
+      hint.textContent = e.message;
+      hint.className = 't-err';
+      return;
+    }
+    save.disabled = diff.length === 0;
+    hint.className = diff.length ? 't-err' : 't-dim';
+    hint.textContent = diff.length
+      ? `${diff.length} change${diff.length > 1 ? 's' : ''} pending — this writes to EEPROM.`
+      : 'Change a value to enable saving.';
+  };
+
+  for (const f of EDITABLE_FIELDS) {
+    $(`f_${f.key}`).addEventListener('input', refresh);
+    $(`f_${f.key}`).addEventListener('change', refresh);
+  }
+  refresh();
+
+  save.addEventListener('click', async () => {
+    const values = formValues();
+    const diff = changedFields(cfg, values);
+    if (!diff.length) return;
+
+    const summary = diff.map((d) =>
+      `  ${d.label}: ${displayValue(d, d.was)} -> ${displayValue(d, d.now)}`).join('\n');
+    const warns = diff.filter((d) => d.warn).map((d) => `\n! ${d.label}: ${d.warn}`).join('');
+    if (!confirm(`Write these settings to the mount's EEPROM?\n\n${summary}\n${warns}`)) return;
+
+    save.disabled = true;
+    const slog = $('savelog');
+    slog.innerHTML = '';
+    const put = (m, cls) => {
+      const d = document.createElement('div');
+      if (cls) d.className = cls;
+      d.textContent = m;
+      slog.appendChild(d);
+    };
+
+    let transport = null;
+    try {
+      const port = await requestPort();
+      transport = new SerialTransport(port, { baudRate: 115200, log });
+      await transport.open();
+
+      // The mount may have rebooted when the port opened.
+      put('Waiting for the mount to answer…');
+      await identify(transport, () => {});
+
+      const res = await writeSettings(transport, values, (m) => put(m));
+      if (!res.accepted) {
+        put(res.error, 't-err');
+        put(`Sent: ${res.sent}`, 't-dim');
+        if (res.raw) put(`Reply: ${JSON.stringify(res.raw)}`, 't-dim');
+      } else {
+        // Verify against the mount's echo rather than trusting the command.
+        const after = changedFields(res.cfg, values);
+        if (after.length) {
+          put('The mount accepted the command but some values did not stick:', 't-err');
+          for (const d of after) {
+            put(`  ${d.label}: asked for ${displayValue(d, d.now)}, ` +
+                `mount reports ${displayValue(d, d.was)}`, 't-err');
+          }
+        } else {
+          put('Saved. The mount echoed back every value as requested.', 't-ok');
+        }
+        put(`New raw ESGi: ${res.cfg.raw}`, 't-dim');
+      }
+    } catch (e) {
+      put(e.message, 't-err');
+    } finally {
+      if (transport) await transport.close();
+      save.disabled = false;
+    }
   });
 }
 
