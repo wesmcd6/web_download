@@ -3,61 +3,328 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PMC-Eight browser tools</title>
+<title>PMC-8 firmware loader</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <main>
-  <h1>PMC-Eight browser tools</h1>
-  <p class="sub">Talk to the mount over USB straight from the browser.
-     No install, no Python, no Terminal.</p>
+  <h1>PMC-8 firmware loader</h1>
+  <p class="sub">Loads Propeller (P1) mount firmware over USB from the browser.
+     This is the <strong>mount brain</strong>, not the Wi-Fi module.
+     &nbsp;·&nbsp; <a href="identify.html">Just identify my mount →</a></p>
 
-  <div id="support" class="notice" hidden></div>
+  <div id="unsupported" class="notice bad" hidden></div>
 
-  <div class="cards">
-    <div class="card">
-      <span class="badge safe">Read-only</span>
-      <h3>Identify my mount</h3>
-      <p>Plug in USB, click once. The mount reports its model, firmware version and
-         which Wi-Fi module is fitted — so you never have to work that out yourself.</p>
-      <a href="identify.html"><button class="primary">Open</button></a>
-    </div>
-
-    <div class="card">
-      <span class="badge permanent">Can write firmware</span>
-      <h3>Firmware loader</h3>
-      <p>Loads Propeller (P1) mount firmware over USB. Staged: handshake and RAM
-         loads are safe or reversible; the EEPROM write is not.</p>
-      <a href="loader.html"><button>Open</button></a>
-    </div>
-  </div>
-
-  <h2>Before you start</h2>
-  <div class="card">
-    <ul style="margin:0;padding-left:1.1rem;color:var(--muted)">
-      <li>Use <strong>desktop Chrome, Edge or Opera</strong>. Firefox, Safari, iOS and
+  <details class="card">
+    <summary>Before you start</summary>
+    <ul style="margin:.8rem 0 0;padding-left:1.1rem;color:var(--muted)">
+      <li>Desktop <strong>Chrome, Edge or Opera</strong>. Firefox, Safari, iOS and
           Android Chrome have no Web Serial API.</li>
-      <li>Close UFCT, the PMC8 Dashboard and any other serial tool first — Windows will
+      <li>Close UFCT, the PMC8 Dashboard and any other serial tool — Windows will
           not share the COM port.</li>
       <li>Power the mount and use the <em>data</em> USB cable, not a charge-only one.</li>
-      <li>This is the <strong>Propeller</strong>, the mount's brain. The Wi-Fi module is a
-          separate processor updated a different way.</li>
+      <li>Work down the phases in order. 0 and 1 write nothing, 2 is undone by a
+          power cycle, 3 is permanent.</li>
     </ul>
+  </details>
+
+  <div class="card">
+    <h3>1 · Connect</h3>
+    <div class="row">
+      <button id="connect" class="primary">Choose serial port</button>
+      <span id="conn" class="t-dim">not connected</span>
+    </div>
+    <details style="margin-top:.9rem">
+      <summary>Reset line options — only touch these if phase 1 fails</summary>
+      <div class="row" style="margin-top:.7rem">
+        <label>line
+          <select id="line"><option value="dtr">DTR (default)</option><option value="rts">RTS</option></select>
+        </label>
+        <label><input type="checkbox" id="invert"> invert polarity</label>
+        <label>assert ms <input type="number" id="resetMs" value="25" min="1" max="500"></label>
+        <label>settle ms <input type="number" id="settleMs" value="90" min="1" max="2000"></label>
+      </div>
+      <p class="t-dim" style="margin-top:.6rem">Defaults match the loader that is
+        already proven on this hardware: reset is on <strong>DTR</strong>, asserted
+        for 25&nbsp;ms, then 90&nbsp;ms to settle.</p>
+    </details>
   </div>
 
-  <h2>What actually happens</h2>
   <div class="card">
-    <p style="margin:0">The page and firmware image are downloaded once over HTTPS. After
-    that the whole session is local — browser to USB driver to mount. You could unplug
-    the network mid-flash and it would still finish.</p>
+    <span class="badge safe">Writes nothing</span>
+    <h3>2 · Phase 0 — reset, listen, then ask the version</h3>
+    <p>Pulses reset, waits for the boot output to finish, then sends <code>ESGv!</code>
+       and parses the reply. Normal firmware emits a long ASCII splash including
+       <code>Mount Type: P9 = n</code> and the Wi-Fi module name, so
+       <strong>silence here is a symptom, not a pass</strong>. A full reset can take
+       15–20&nbsp;seconds, so <code>ESGv!</code> is retried for up to 30&nbsp;seconds
+       rather than asked once — leave it running.
+       <code>ESGv!</code> is a pure read — nothing is written.</p>
+    <button id="phase0" disabled>Reset, then read version</button>
+  </div>
+
+  <div class="card">
+    <span class="badge safe">Writes nothing</span>
+    <h3>3 · Phase 1 — handshake and read version</h3>
+    <p>The real milestone. Proves the reset wiring, the line polarity, the LFSR and
+       that the boot ROM's timing window is reachable from a browser. A P1 answers
+       version&nbsp;1. Nothing is stored on the mount.</p>
+    <button id="phase1" disabled>Handshake</button>
+  </div>
+
+  <div class="card">
+    <h3>4 · Firmware image</h3>
+    <div class="row">
+      <input type="file" id="file" accept=".binary,.bin">
+    </div>
+    <div id="fileinfo" class="t-dim" style="margin-top:.6rem">No image chosen.</div>
+  </div>
+
+  <div class="card">
+    <span class="badge reversible">Reversible</span>
+    <h3>5 · Phase 2 — load to RAM</h3>
+    <p>Loads and runs from RAM. <strong>A power cycle restores the existing
+       firmware</strong>, which makes this the safe way to exercise the whole
+       bulk-transfer path against real hardware.</p>
+    <button id="phase2" disabled>Load to RAM and run</button>
+    <span id="hint2" class="t-dim"></span>
+    <progress id="prog" value="0" max="1" hidden></progress>
+  </div>
+
+  <div class="card">
+    <span class="badge permanent">Permanent</span>
+    <h3>6 · Phase 3 — write EEPROM</h3>
+    <p>Overwrites the mount's firmware. Do this only once phases 1 and 2 are boringly
+       repeatable, with a known-good image in hand and a desktop loader standing by
+       for recovery. Do not disconnect during the burn.</p>
+    <div class="row">
+      <label>type <code>WRITE</code> to arm
+        <input type="text" id="arm" autocomplete="off" style="font:inherit;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:.35rem .5rem;width:7rem">
+      </label>
+      <button id="phase3" class="danger" disabled>Write to EEPROM</button>
+    </div>
+    <div id="hint3" class="t-dim" style="margin-top:.5rem"></div>
+  </div>
+
+  <div id="log"></div>
+  <div class="row" style="margin-top:.6rem">
+    <button id="copy">Copy log</button>
+    <button id="clear">Clear</button>
   </div>
 </main>
 
 <script type="module">
-import { isSupported, unsupportedReason } from './src/p1-serial.js';
-const el = document.getElementById('support');
-const reason = (!isSupported() || !window.isSecureContext) ? unsupportedReason() : null;
-if (reason) { el.hidden = false; el.classList.add('bad'); el.textContent = reason; }
+import { SerialTransport, requestPort, isSupported, unsupportedReason } from './src/p1-serial.js';
+import { P1Loader, resetAndListen } from './src/p1-loader.js';
+import { RUN_FROM_RAM, EEPROM_RUN, estimateSeconds, buildPayload } from './src/p1-protocol.js';
+
+const $ = (id) => document.getElementById(id);
+const logEl = $('log');
+let port = null, transport = null, image = null;
+
+function log(msg, cls = '') {
+  const t = new Date().toISOString().slice(11, 23);
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = `${t}  ${msg}`;
+  logEl.appendChild(line);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function hexdump(bytes, max = 2048) {
+  const n = Math.min(bytes.length, max);
+  let out = '';
+  for (let i = 0; i < n; i += 16) {
+    const slice = bytes.subarray(i, i + 16);
+    const hex = Array.from(slice, (b) => b.toString(16).padStart(2, '0')).join(' ');
+    const asc = Array.from(slice, (b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('');
+    out += `${i.toString(16).padStart(4, '0')}  ${hex.padEnd(47)}  ${asc}\n`;
+  }
+  if (bytes.length > max) out += `… ${bytes.length - max} more bytes\n`;
+  return out;
+}
+
+if (!isSupported() || !window.isSecureContext) {
+  const el = $('unsupported');
+  el.hidden = false;
+  el.textContent = unsupportedReason() ?? 'Web Serial is unavailable.';
+  $('connect').disabled = true;
+}
+
+function opts() {
+  return {
+    useRts: $('line').value === 'rts',
+    invertDtr: $('invert').checked,
+    resetMs: Number($('resetMs').value),
+    settleMs: Number($('settleMs').value),
+    log,
+  };
+}
+
+async function ensureOpen() {
+  if (transport) await transport.close();
+  transport = new SerialTransport(port, opts());
+  await transport.open();
+  return transport;
+}
+
+function setReady(on) {
+  $('phase0').disabled = !on;
+  $('phase1').disabled = !on;
+  refreshWriteButtons();
+}
+
+/**
+ * Keep the write buttons in step with their preconditions AND say which one is
+ * missing. A greyed-out button with no explanation reads as a broken page —
+ * typing WRITE does nothing while no image is loaded, which looks like the
+ * arming box is refusing input.
+ */
+function refreshWriteButtons() {
+  const armed = $('arm').value.trim().toUpperCase() === 'WRITE';
+  const blocker = !port ? 'Select a serial port in step 1.'
+                : !image ? 'Choose a firmware image in step 4.'
+                : null;
+
+  $('phase2').disabled = !!blocker;
+  $('hint2').textContent = blocker ?? '';
+
+  $('phase3').disabled = !!blocker || !armed;
+  $('hint3').textContent = blocker
+    ? blocker
+    : armed
+      ? 'Armed. This will overwrite the mount firmware permanently.'
+      : 'Type WRITE in the box to arm.';
+  $('hint3').className = blocker ? 't-dim' : (armed ? 't-err' : 't-dim');
+}
+
+$('arm').addEventListener('input', refreshWriteButtons);
+refreshWriteButtons();
+
+$('connect').addEventListener('click', async () => {
+  try {
+    port = await requestPort();
+    const i = port.getInfo?.() ?? {};
+    const id = (i.usbVendorId != null)
+      ? ` (VID ${i.usbVendorId.toString(16).padStart(4, '0')}:` +
+        `PID ${String(i.usbProductId ?? 0).toString(16).padStart(4, '0')})`
+      : '';
+    $('conn').textContent = `port selected${id}`;
+    $('conn').className = 't-ok';
+    log(`Port selected${id}. Close any desktop tool holding the port first.`);
+    setReady(true);
+  } catch (e) {
+    log(e.message, 't-err');
+  }
+});
+
+$('file').addEventListener('change', async (ev) => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  image = new Uint8Array(await f.arrayBuffer());
+  const digest = await crypto.subtle.digest('SHA-256', image);
+  const hash = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+  let note = '';
+  try {
+    const payload = buildPayload(image, RUN_FROM_RAM);
+    note = `${payload.length} encoded bytes, ~${estimateSeconds(payload.length).toFixed(1)}s on the wire`;
+  } catch (e) {
+    note = `<span class="t-err">rejected: ${e.message}</span>`;
+    image = null;
+  }
+  $('fileinfo').innerHTML =
+    `<strong>${f.name}</strong> — ${image ? image.length : f.size} bytes` +
+    `${image ? ` (${image.length / 4} longs)` : ''}<br>` +
+    `SHA-256 ${hash}<br>${note}`;
+  log(`Image: ${f.name}, ${f.size} bytes, sha256 ${hash}`);
+  refreshWriteButtons();
+});
+
+$('phase0').addEventListener('click', async () => {
+  $('phase0').disabled = true;
+  try {
+    const t = await ensureOpen();
+    log('Phase 0 — reset, wait for boot, then ESGv!…');
+    const r = await resetAndListen(t, { progress: (m) => log(`  ${m}`) });
+
+    if (!r.splash.length) {
+      log('SILENT. Normal firmware prints a boot splash, so this points at wrong ' +
+          'reset line/polarity, wrong baud, or the port being held elsewhere.', 't-err');
+    } else {
+      log(`${r.splash.length} bytes of boot output:`, 't-ok');
+      log(hexdump(r.splash));
+      if (r.p9 !== null) log(`  splash reports Mount Type: P9 = ${r.p9}`);
+    }
+
+    if (r.wifiLine) log(`  splash reports Wi-Fi module: ${r.wifiLine}`);
+
+    if (r.versionConfirmed) {
+      log(`PHASE 0 OK — ESGv! answered: ${r.firmware}`, 't-ok');
+      log(`  Round trip confirmed after ${r.versionAttempts} attempt(s): reset works, ` +
+          'the firmware is running and answering commands. Nothing was written.', 't-dim');
+    } else if (r.firmware) {
+      log(`ESGv! never answered in ${r.versionAttempts} attempts (${r.versionError}).`, 't-err');
+      log(`  The banner below came from the boot splash text, NOT from ESGv! — ` +
+          `${r.firmware}. That proves reset works but not that the command ` +
+          'interpreter is answering.', 't-dim');
+    } else {
+      log(`ESGv! never answered in ${r.versionAttempts} attempts: ${r.versionError}`, 't-err');
+    }
+  } catch (e) {
+    log(e.message, 't-err');
+  } finally {
+    await transport?.close(); transport = null;
+    $('phase0').disabled = false;
+  }
+});
+
+$('phase1').addEventListener('click', async () => {
+  try {
+    const t = await ensureOpen();
+    log('Phase 1 — handshake…');
+    const loader = new P1Loader(t, (m) => log(`  ${m}`));
+    const v = await loader.handshake();
+    log(v === 1
+      ? 'HANDSHAKE OK — Propeller version 1. Reset wiring, polarity and encoder all confirmed.'
+      : `Handshake completed but version is ${v}, expected 1.`,
+      v === 1 ? 't-ok' : 't-err');
+  } catch (e) {
+    log(e.message, 't-err');
+    log('If bytes came back but did not match, suspect polarity or timings before ' +
+        'anything else. If nothing came back, run phase 0.', 't-dim');
+  } finally {
+    await transport?.close(); transport = null;
+  }
+});
+
+async function doLoad(kind, label) {
+  try {
+    const t = await ensureOpen();
+    log(`${label} — starting.`);
+    $('prog').hidden = false; $('prog').removeAttribute('value');
+    const loader = new P1Loader(t, (m) => log(`  ${m}`));
+    const { version, seconds } = await loader.load(image, kind);
+    log(`${label} COMPLETE in ${seconds.toFixed(1)}s (chip version ${version}).`, 't-ok');
+  } catch (e) {
+    log(`${label} FAILED: ${e.message}`, 't-err');
+  } finally {
+    $('prog').hidden = true;
+    await transport?.close(); transport = null;
+  }
+}
+
+$('phase2').addEventListener('click', () => doLoad(RUN_FROM_RAM, 'Phase 2 (RAM)'));
+
+$('phase3').addEventListener('click', async () => {
+  if (!confirm('This overwrites the mount firmware permanently.\n\n' +
+               'Have a known-good image and a desktop loader ready before continuing.')) return;
+  $('arm').value = '';
+  refreshWriteButtons();
+  await doLoad(EEPROM_RUN, 'Phase 3 (EEPROM)');
+});
+
+$('copy').addEventListener('click', () => navigator.clipboard.writeText(logEl.innerText));
+$('clear').addEventListener('click', () => { logEl.innerHTML = ''; });
 </script>
 </body>
 </html>

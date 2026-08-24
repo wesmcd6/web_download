@@ -146,14 +146,36 @@ export async function ask(transport, cmd, { timeoutMs = 2000, expect = null } = 
  * Full identify. Read-only: sends ESGv! and ESGi! and nothing else.
  * Never pulses reset — a mount mid-slew should not be interrupted.
  */
-export async function identify(transport, log = () => {}) {
-  log('Asking the mount for its firmware version (ESGv!)…');
-  const vRaw = await ask(transport, 'ESGv!', { expect: 'ESGv' });
-  if (!vRaw.trim()) {
+export async function identify(transport, log = () => {}, { waitMs = 25000 } = {}) {
+  // Opening the serial port can itself reset the mount: the OS driver may
+  // assert DTR before the page can de-assert it, and DTR is wired to the
+  // Propeller's reset line. The firmware then takes 15-20s to boot, during
+  // which the command interpreter is not running and ESGv! is ignored.
+  //
+  // So poll rather than asking once. A single attempt reports "no reply" for
+  // a mount that is merely rebooting, which sends people baud-rate hunting
+  // for a problem they do not have.
+  const deadline = Date.now() + waitMs;
+  let vRaw = '';
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt++;
+    const left = Math.ceil((deadline - Date.now()) / 1000);
+    log(attempt === 1
+      ? 'Asking the mount for its firmware version (ESGv!)…'
+      : `  no reply yet — the mount may be rebooting (${left}s left, attempt ${attempt})`);
+    vRaw = await ask(transport, 'ESGv!', { expect: 'ESGv', timeoutMs: 2000 });
+    if (vRaw.includes('ESGv')) break;
+    await sleep(700);
+  }
+
+  if (!vRaw.includes('ESGv')) {
     throw new Error(
-      'No reply to ESGv!. Check the mount is powered and the cable is the ' +
-      'data cable, then try the other baud rates — a previous ESSi! can ' +
-      'leave the mount booting at 9600–57600 instead of 115200.');
+      `No reply to ESGv! after ${attempt} attempts over ${Math.round(waitMs / 1000)}s. ` +
+      'Check the mount is powered and that this is the data cable, and close ' +
+      'UFCT / the PMC8 Dashboard if either is holding the port. If the mount ' +
+      'is definitely running, try the baud sweep — a previous ESSi! can leave ' +
+      'it booting at 9600–57600 instead of 115200.');
   }
   const firmware = parseESGv(vRaw);
   log(`Firmware: ${firmware}`);

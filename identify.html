@@ -10,13 +10,15 @@
 <main>
   <h1>Identify my PMC-Eight</h1>
   <p class="sub">Plug in the USB cable, click once, and the mount tells you what it is —
-     model, firmware version, and which Wi-Fi module is fitted.</p>
+     model, firmware version, and which Wi-Fi module is fitted.
+     &nbsp;·&nbsp; <a href="./">← Firmware loader</a></p>
 
   <div class="card">
     <span class="badge safe">Read-only</span>
     <p>This page sends exactly two commands, <code>ESGv!</code> and <code>ESGi!</code>.
-       Both are pure reads. Nothing is written, no setting is changed, no motor moves,
-       and the mount is never reset.</p>
+       Both are pure reads. Nothing is written, no setting is changed and no motor moves.</p>
+    <p>Opening the port can make the mount reboot on its own, which takes 15–20&nbsp;seconds.
+       If that happens this just keeps asking until it answers — leave it running.</p>
     <div class="row">
       <button id="go" class="primary">Connect and identify</button>
       <label><input type="checkbox" id="sweep"> try all baud rates</label>
@@ -101,7 +103,9 @@ $('go').addEventListener('click', async () => {
       transport = new SerialTransport(port, { baudRate: baud, log });
       await transport.open();
       try {
-        info = await identify(transport, (m) => log(m));
+        // When sweeping, do not sit through a full reboot wait on every rate.
+        info = await identify(transport, (m) => log(m),
+                              { waitMs: rates.length > 1 ? 3000 : 25000 });
         usedBaud = baud;
         break;
       } catch (e) {
