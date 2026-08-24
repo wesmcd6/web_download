@@ -17,8 +17,13 @@ import { sleep } from './p1-serial.js';
 const DEC = new TextDecoder('latin1');
 const ENC = new TextEncoder();
 
-/** Legal baud rates the firmware will accept; it defaults to 115200. */
-export const BAUD_RATES = [115200, 9600, 19200, 38400, 57600, 14400];
+/**
+ * The firmware validates PARAM_0 against exactly this set and defaults to
+ * 115200. In practice mounts are always at 115200, so the tools open at that
+ * rate and do not sweep; this is kept for reference and for any future
+ * recovery path if a mount is ever found at a non-default rate.
+ */
+export const BAUD_RATES = [115200, 9600, 14400, 19200, 38400, 57600];
 
 /**
  * P9 -> mount model. The firmware prints P9 as DECIMAL in the ESGi reply but
@@ -263,9 +268,7 @@ export async function identify(transport, log = () => {}, { waitMs = 25000 } = {
     throw new Error(
       `No reply to ESGv! after ${attempt} attempts over ${Math.round(waitMs / 1000)}s. ` +
       'Check the mount is powered and that this is the data cable, and close ' +
-      'UFCT / the PMC8 Dashboard if either is holding the port. If the mount ' +
-      'is definitely running, try the baud sweep — a previous ESSi! can leave ' +
-      'it booting at 9600–57600 instead of 115200.');
+      'UFCT / the PMC8 Dashboard if either is holding the port.');
   }
   const firmware = parseESGv(vRaw);
   log(`Firmware: ${firmware}`);
@@ -278,20 +281,7 @@ export async function identify(transport, log = () => {}, { waitMs = 25000 } = {
   return { firmware, ...cfg };
 }
 
-/**
- * Try each legal baud rate until ESGv! answers. Used only when the user asks
- * for it — reopening the port is slow, and on Linux it can reset the mount.
- */
-export async function autoBaud(makeTransport, log = () => {}) {
-  for (const baud of BAUD_RATES) {
-    log(`Trying ${baud} baud…`);
-    const t = await makeTransport(baud);
-    try {
-      const reply = await ask(t, 'ESGv!', { timeoutMs: 1200, expect: 'ESGv' });
-      if (reply.includes('ESGv')) { log(`Answered at ${baud}.`); return { transport: t, baud }; }
-    } catch { /* fall through to next rate */ }
-    await t.close();
-    await sleep(120);
-  }
-  throw new Error('No reply at any of the six legal baud rates.');
-}
+// A baud sweep used to live here. Removed: mounts are always at 115200, so it
+// was a control that existed only to be left alone, and reopening the port per
+// rate is slow and can reset the mount. BAUD_RATES above documents the legal
+// set if a recovery path is ever genuinely needed.

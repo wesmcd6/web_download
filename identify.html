@@ -21,7 +21,6 @@
        If that happens this just keeps asking until it answers — leave it running.</p>
     <div class="row">
       <button id="go" class="primary">Connect and read settings</button>
-      <label><input type="checkbox" id="sweep"> try all baud rates</label>
     </div>
   </div>
 
@@ -45,7 +44,7 @@
 
 <script type="module">
 import { SerialTransport, requestPort, isSupported, unsupportedReason } from './src/p1-serial.js';
-import { identify, settingsRows, readEnvision, BAUD_RATES } from './src/pmc8-identify.js';
+import { identify, settingsRows, readEnvision } from './src/pmc8-identify.js';
 
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
@@ -127,27 +126,9 @@ $('go').addEventListener('click', async () => {
   let transport = null;
   try {
     const port = await requestPort();
-    const rates = $('sweep').checked ? BAUD_RATES : [115200];
-    let info = null, usedBaud = null;
-
-    for (const baud of rates) {
-      if (rates.length > 1) log(`Trying ${baud} baud…`, 't-dim');
-      transport = new SerialTransport(port, { baudRate: baud, log });
-      await transport.open();
-      try {
-        // When sweeping, do not sit through a full reboot wait on every rate.
-        info = await identify(transport, (m) => log(m),
-                              { waitMs: rates.length > 1 ? 3000 : 25000 });
-        usedBaud = baud;
-        break;
-      } catch (e) {
-        log(`  ${e.message}`, 't-dim');
-        await transport.close();
-        transport = null;
-      }
-    }
-
-    if (!info) throw new Error('The mount did not answer. Nothing was changed.');
+    transport = new SerialTransport(port, { baudRate: 115200, log });
+    await transport.open();
+    const info = await identify(transport, (m) => log(m));
 
     let envision = null;
     if ($('envision').checked) {
@@ -162,7 +143,7 @@ $('go').addEventListener('click', async () => {
     log($('envision').checked
       ? 'Done. ESGv! and ESGi! wrote nothing; ESGe! was sent as requested.'
       : 'Done — nothing was written to the mount.', 't-ok');
-    show(info, usedBaud, envision);
+    show(info, 115200, envision);
   } catch (e) {
     log(e.message, 't-err');
   } finally {
