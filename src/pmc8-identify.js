@@ -201,6 +201,126 @@ export async function readEnvision(transport, cfg, log = () => {}) {
   return { skipped: false, ...parsed, text: fastServerText(parsed) };
 }
 
+/**
+ * Parse an AT+GMR response, e.g.
+ *
+ *   AT version:2.2.0.0(s-ab8f5f8 - ESP32 - Jul 28 2021 07:05:28)
+ *   SDK version:v4.3.1-0-g0e50573
+ *   compile time(6118fc22):Feb 18 2022 07:32:35
+ *   Bin version:ES2.2.0(WROOM-32)
+ *   OK
+ */
+export function parseGmr(reply) {
+  const s = typeof reply === 'string' ? reply : DEC.decode(reply);
+  const grab = (re) => { const m = s.match(re); return m ? m[1].trim() : null; };
+  const bin = grab(/Bin version:\s*([^\r\n]+)/i);
+  return {
+    at: grab(/AT version:\s*([^\r\n]+)/i),
+    sdk: grab(/SDK version:\s*([^\r\n]+)/i),
+    compileTime: grab(/compile time[^:]*:\s*([^\r\n]+)/i),
+    bin,
+    // The firmware's own ESP32 test is literally the byte pair "ES" in the
+    // AT+GMR output — the ES branding, not the "WROOM-32" chip name.
+    esBranded: bin ? /^ES/i.test(bin) : false,
+    raw: s.replace(/\r/g, '').trim(),
+  };
+}
+
+/**
+ * Read the Wi-Fi module's own version via AT+GMR.
+ *
+ * NOT read-only, and not part of identify(). This changes the Propeller's
+ * mode: ESPw42! hands the USB line to the Wi-Fi module and blocks the ES
+ * command interpreter until passthrough ends.
+ *
+ * The exit is `###` — a bare escape sequence, no terminator. It is sent in a
+ * finally block so it runs even if the module never answers; leaving the mount
+ * in passthrough would make it deaf to ES commands until power-cycled.
+ *
+ * Skipped on RN-131, which does not use the AT command set.
+ */
+export async function readEspVersion(transport, cfg, log = () => {}) {
+  if (cfg.wifiType === 0) {
+    return { skipped: true, reason: 'RN-131 does not use AT commands.' };
+  }
+
+  const result = { skipped: false, entered: false, exited: false, gmr: null };
+
+  log('Entering passthrough (ESPw42!)…');
+  transport.flush();
+  await transport.tx(ENC.encode('ESPw42!'));
+  await sleep(400);
+  result.entered = true;
+
+  try {
+    // The module usually ignores the first few AT probes; the firmware's own
+    // detection sends AT twice and notes the first often returns ERROR.
+    let ready = false;
+    for (let i = 1; i <= 12 && !ready; i++) {
+      log(`  AT probe ${i}…`);
+      transport.flush();
+      await transport.tx(ENC.encode('AT\r\n'));
+      const deadline = Date.now() + 800;
+      let acc = '';
+      while (Date.now() < deadline) {
+        const d = await transport.rxTimeout(256, Math.max(50, deadline - Date.now()));
+        if (d.length) acc += DEC.decode(d);
+        if (/\bOK\b/.test(acc)) { ready = true; break; }
+      }
+      if (!ready) await sleep(250);
+    }
+
+    if (!ready) {
+      result.error = 'The module never answered AT with OK.';
+      return result;
+    }
+    log('  module answered OK — sending AT+GMR');
+
+    transport.flush();
+    await transport.tx(ENC.encode('AT+GMR\r\n'));
+    const deadline = Date.now() + 3000;
+    let acc = '';
+    while (Date.now() < deadline) {
+      const d = await transport.rxTimeout(512, Math.max(50, deadline - Date.now()));
+      if (d.length) acc += DEC.decode(d);
+      if (/\bOK\b/.test(acc) && /version/i.test(acc)) break;
+    }
+    result.gmr = parseGmr(acc);
+    if (!result.gmr.at && !result.gmr.bin) result.error = 'AT+GMR returned nothing usable.';
+  } finally {
+    // Always leave passthrough, whatever happened above.
+    log('Leaving passthrough (###)…');
+    try {
+      transport.flush();
+      await transport.tx(ENC.encode('###'));
+      const deadline = Date.now() + 2000;
+      let acc = '';
+      while (Date.now() < deadline) {
+        const d = await transport.rxTimeout(256, Math.max(50, deadline - Date.now()));
+        if (d.length) acc += DEC.decode(d);
+        if (/exit/i.test(acc)) break;
+      }
+      result.exitMessage = acc.replace(/[\r\n]+/g, ' ').trim();
+      result.exited = /exit/i.test(acc);
+    } catch (e) {
+      result.exitError = e.message;
+    }
+  }
+
+  // Prove ES commands work again rather than assuming they do.
+  try {
+    const back = await ask(transport, 'ESGv!', { expect: 'ESGv', timeoutMs: 2000 });
+    result.esRestored = back.includes('ESGv');
+  } catch {
+    result.esRestored = false;
+  }
+  log(result.esRestored
+    ? 'ES commands confirmed working again.'
+    : 'WARNING: ES commands did not answer after exiting passthrough.');
+
+  return result;
+}
+
 /** Parse the ESGv reply: "ESGv" + build string + "!" (no CRLF terminator). */
 export function parseESGv(reply) {
   const s = typeof reply === 'string' ? reply : DEC.decode(reply);

@@ -37,6 +37,21 @@
     </div>
   </details>
 
+  <details class="card">
+    <summary>Also read the Wi-Fi module's own version (changes mode)</summary>
+    <p style="margin:.8rem 0 0">Gets the module's <code>AT+GMR</code> output — AT
+       version, SDK version and the bin version such as
+       <code>ES2.2.0(WROOM-32)</code>. Reaching it means
+       <code>ESPw42!</code>, which hands the USB line to the module and
+       <strong>blocks the mount's command interpreter</strong> until passthrough
+       ends. The exit (<code>###</code>) is always sent, even if the module never
+       answers, and ES commands are then re-tested before reporting success.
+       Skipped on RN-131, which does not use AT commands.</p>
+    <div class="row" style="margin-top:.8rem">
+      <label><input type="checkbox" id="gmr"> enter passthrough and run <code>AT+GMR</code></label>
+    </div>
+  </details>
+
   <div id="unsupported" class="notice bad" hidden></div>
   <div id="result" hidden></div>
   <div id="log" hidden></div>
@@ -44,7 +59,9 @@
 
 <script type="module">
 import { SerialTransport, requestPort, isSupported, unsupportedReason } from './src/p1-serial.js';
-import { identify, settingsRows, readEnvision } from './src/pmc8-identify.js';
+import {
+  identify, settingsRows, readEnvision, readEspVersion,
+} from './src/pmc8-identify.js';
 
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
@@ -73,7 +90,7 @@ function row(k, v, extra) {
     extra ? `<br><span class="t-dim">${esc(extra)}</span>` : ''}</td></tr>`;
 }
 
-function show(info, baud, envision) {
+function show(info, baud, envision, esp) {
   const el = $('result');
   el.hidden = false;
 
@@ -91,6 +108,24 @@ function show(info, baud, envision) {
           envision.value != null ? `ESGe! = ${envision.value}` : null)
     : '';
 
+  let module = '';
+  if (esp && !esp.skipped && esp.gmr) {
+    const g = esp.gmr;
+    if (g.bin) {
+      module += row('Module bin version', g.bin,
+                    g.esBranded
+                      ? 'ES-branded build — this is what the mount matches on.'
+                      : 'Not ES-branded; the mount would report this module as type 1.');
+    }
+    if (g.at) module += row('Module AT version', g.at);
+    if (g.sdk) module += row('Module SDK version', g.sdk);
+    if (g.compileTime) module += row('Module compiled', g.compileTime);
+    if (!esp.esRestored) {
+      module += row('Passthrough', 'ES commands did not answer after exit',
+                    'Power-cycle the mount.');
+    }
+  }
+
   el.innerHTML = `
     <div class="card">
       <h3>Configuration</h3>
@@ -98,6 +133,7 @@ function show(info, baud, envision) {
         ${row('Firmware', info.firmware)}
         ${rows}
         ${fast}
+        ${module}
         ${connNote}
         ${row('Raw ESGi', info.raw)}
       </table>
@@ -112,6 +148,8 @@ function show(info, baud, envision) {
     const lines = [`Firmware: ${info.firmware}`];
     for (const r of settingsRows(info)) lines.push(`${r.label}: ${r.value}`);
     if (envision) lines.push(`Fast Server (Envision): ${envision.text}`);
+    if (esp?.gmr?.bin) lines.push(`Module bin version: ${esp.gmr.bin}`);
+    if (esp?.gmr?.at) lines.push(`Module AT version: ${esp.gmr.at}`);
     lines.push(`Raw ESGi: ${info.raw}`);
     navigator.clipboard.writeText(lines.join('\n'));
     $('copycfg').textContent = 'Copied';
@@ -140,10 +178,26 @@ $('go').addEventListener('click', async () => {
       }
     }
 
-    log($('envision').checked
-      ? 'Done. ESGv! and ESGi! wrote nothing; ESGe! was sent as requested.'
+    let esp = null;
+    if ($('gmr').checked) {
+      esp = await readEspVersion(transport, info, (m) => log(m));
+      if (esp.skipped) log(`Module version skipped: ${esp.reason}`, 't-dim');
+      else if (esp.error) log(`AT+GMR: ${esp.error}`, 't-err');
+      else log(`Module bin version: ${esp.gmr?.bin ?? '(unknown)'}`, 't-ok');
+      if (esp.entered && !esp.exited) {
+        log('WARNING: no exit confirmation from passthrough. If the mount stops ' +
+            'answering ES commands, power-cycle it.', 't-err');
+      }
+    }
+
+    const extras = [
+      $('envision').checked ? 'ESGe!' : null,
+      $('gmr').checked ? 'ESPw42!/AT+GMR/###' : null,
+    ].filter(Boolean);
+    log(extras.length
+      ? `Done. ESGv! and ESGi! wrote nothing; ${extras.join(' and ')} sent as requested.`
       : 'Done — nothing was written to the mount.', 't-ok');
-    show(info, 115200, envision);
+    show(info, 115200, envision, esp);
   } catch (e) {
     log(e.message, 't-err');
   } finally {
