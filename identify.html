@@ -45,8 +45,10 @@
        <code>ESPw42!</code>, which hands the USB line to the module and
        <strong>blocks the mount's command interpreter</strong> until passthrough
        ends. The exit (<code>###</code>) is always sent, even if the module never
-       answers, and ES commands are then re-tested before reporting success.
-       Skipped on RN-131, which does not use AT commands.</p>
+       answers, and ES commands are then re-tested before reporting success.</p>
+    <p style="margin:.6rem 0 0">Automatically skipped if the mount reports an
+       <strong>RN-131</strong>: that module is not an AT-command device, so
+       nothing is sent to it at all.</p>
     <div class="row" style="margin-top:.8rem">
       <label><input type="checkbox" id="gmr"> enter passthrough and run <code>AT+GMR</code></label>
     </div>
@@ -108,31 +110,47 @@ function show(info, baud, envision, esp) {
           envision.value != null ? `ESGe! = ${envision.value}` : null)
     : '';
 
-  let module = '';
-  if (esp && !esp.skipped && esp.gmr) {
+  // The two firmware versions sit together at the top: the Propeller's, and
+  // the Wi-Fi module's. They are different processors and both matter.
+  let espFirmware = '';
+  let moduleHw = '';
+  let moduleDetail = '';
+
+  if (esp) {
     const g = esp.gmr;
-    if (g.bin) {
-      module += row('Module bin version', g.bin,
-                    g.esBranded
-                      ? 'ES-branded build — this is what the mount matches on.'
-                      : 'Not ES-branded; the mount would report this module as type 1.');
-      if (g.tag) {
-        module += row(
-          'Module hardware',
-          g.module ? `${g.module}  (${g.tag})` : `Unrecognized  (${g.tag})`,
-          g.module
-            ? (g.moduleConfirmed
-                ? 'Read straight off the module, not inferred by the mount.'
-                : 'Mapped from the tag but not yet seen on real hardware here.')
-            : 'The tag did not match a known module — please report it.');
-      }
+    if (esp.skipped) {
+      espFirmware = row('ESP firmware', 'Not applicable — RN-131',
+                        esp.reason ?? 'RN-131 does not use the AT command set.');
+    } else if (g && g.bin) {
+      espFirmware = row('ESP firmware', g.bin,
+                        g.esBranded
+                          ? 'ES-branded build — this is what the mount matches on.'
+                          : 'Not ES-branded; the mount would report this module as type 1.');
+    } else {
+      espFirmware = row('ESP firmware', 'Not read',
+                        esp.error ?? 'AT+GMR did not return a Bin version line.');
     }
-    if (g.at) module += row('Module AT version', g.at);
-    if (g.sdk) module += row('Module SDK version', g.sdk);
-    if (g.compileTime) module += row('Module compiled', g.compileTime);
-    if (!esp.esRestored) {
-      module += row('Passthrough', 'ES commands did not answer after exit',
-                    'Power-cycle the mount.');
+
+    if (g && g.tag) {
+      moduleHw = row(
+        'Module hardware',
+        g.module ? `${g.module}  (${g.tag})` : `Unrecognized  (${g.tag})`,
+        g.module
+          ? (g.moduleConfirmed
+              ? 'Read straight off the module, not inferred by the mount.'
+              : 'Mapped from the tag but not yet seen on real hardware here.')
+          : 'The tag did not match a known module — please report it.');
+    }
+
+    if (g && g.at) moduleDetail += row('Module AT version', g.at);
+    if (g && g.sdk) moduleDetail += row('Module SDK version', g.sdk);
+    if (g && g.compileTime) moduleDetail += row('Module compiled', g.compileTime);
+    if (!esp.skipped && esp.rawGmr && !(g && g.bin)) {
+      moduleDetail += row('Raw AT+GMR', esp.rawGmr);
+    }
+    if (!esp.skipped && !esp.esRestored) {
+      moduleDetail += row('Passthrough', 'ES commands did not answer after exit',
+                          'Power-cycle the mount.');
     }
   }
 
@@ -140,10 +158,12 @@ function show(info, baud, envision, esp) {
     <div class="card">
       <h3>Configuration</h3>
       <table>
-        ${row('Firmware', info.firmware)}
+        ${row('Mount firmware', info.firmware)}
+        ${espFirmware}
+        ${moduleHw}
         ${rows}
         ${fast}
-        ${module}
+        ${moduleDetail}
         ${connNote}
         ${row('Raw ESGi', info.raw)}
       </table>
@@ -155,13 +175,15 @@ function show(info, baud, envision, esp) {
     </div>`;
 
   $('copycfg').addEventListener('click', () => {
-    const lines = [`Firmware: ${info.firmware}`];
-    for (const r of settingsRows(info)) lines.push(`${r.label}: ${r.value}`);
-    if (envision) lines.push(`Fast Server (Envision): ${envision.text}`);
-    if (esp?.gmr?.bin) lines.push(`Module bin version: ${esp.gmr.bin}`);
+    const lines = [`Mount firmware: ${info.firmware}`];
+    if (esp?.skipped) lines.push('ESP firmware: not applicable — RN-131');
+    else if (esp?.gmr?.bin) lines.push(`ESP firmware: ${esp.gmr.bin}`);
+    else if (esp) lines.push('ESP firmware: not read');
     if (esp?.gmr?.tag) {
       lines.push(`Module hardware: ${esp.gmr.module ?? 'unrecognized'} (${esp.gmr.tag})`);
     }
+    for (const r of settingsRows(info)) lines.push(`${r.label}: ${r.value}`);
+    if (envision) lines.push(`Fast Server (Envision): ${envision.text}`);
     if (esp?.gmr?.at) lines.push(`Module AT version: ${esp.gmr.at}`);
     lines.push(`Raw ESGi: ${info.raw}`);
     navigator.clipboard.writeText(lines.join('\n'));

@@ -280,8 +280,16 @@ export function parseGmr(reply) {
  * Skipped on RN-131, which does not use the AT command set.
  */
 export async function readEspVersion(transport, cfg, log = () => {}) {
+  // Third possibility, and it must be refused before anything is sent: an
+  // RN-131 is not an AT-command device at all. Its command mode works
+  // differently, so ESPw42! + AT would be meaningless at best. The mount
+  // reports the module in ESGi!'s `w` field and in the boot splash, so we
+  // always know before committing to passthrough.
   if (cfg.wifiType === 0) {
-    return { skipped: true, reason: 'RN-131 does not use AT commands.' };
+    return {
+      skipped: true,
+      reason: 'RN-131 does not use the AT command set — passthrough not attempted.',
+    };
   }
 
   const result = { skipped: false, entered: false, exited: false, gmr: null };
