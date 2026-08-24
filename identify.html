@@ -25,18 +25,6 @@
     </div>
   </div>
 
-  <details class="card">
-    <summary>Also read Fast Server / Envision status (not read-only)</summary>
-    <p style="margin:.8rem 0 0">The Dashboard reads this with <code>ESGe!</code>.
-       Despite looking like a getter it is <strong>not side-effect free</strong>: if
-       the Wi-Fi module answers <code>ERROR</code>, the firmware writes
-       <code>ENVISION_BOOT = 0</code> to EEPROM and commits. It can also block for a
-       couple of seconds waiting on the module. Off by default for that reason;
-       skipped automatically on RN-131, which is never Envision-capable.</p>
-    <div class="row" style="margin-top:.8rem">
-      <label><input type="checkbox" id="envision"> send <code>ESGe!</code> as well</label>
-    </div>
-  </details>
 
 
   <div id="unsupported" class="notice bad" hidden></div>
@@ -90,10 +78,9 @@ function show(info, baud, envision, esp) {
           'Differs from the stored baud rate above.')
     : '';
 
-  const fast = envision
-    ? row('Fast Server (Envision)', envision.text,
-          envision.value != null ? `ESGe! = ${envision.value}` : null)
-    : '';
+  const fast = row('Envision / Fast Server',
+                   envision?.text ?? 'Not read',
+                   envision?.value != null ? `ESGe! = ${envision.value}` : null);
 
   // The two firmware versions sit together at the top: the Propeller's, and
   // the Wi-Fi module's. They are different processors and both matter.
@@ -187,13 +174,12 @@ $('go').addEventListener('click', async () => {
     const info = await identify(transport, (m) => log(m));
 
     let envision = null;
-    if ($('envision').checked) {
-      try {
-        envision = await readEnvision(transport, info, (m) => log(m));
-        log(`Fast Server: ${envision.text}`);
-      } catch (e) {
-        log(`ESGe! failed: ${e.message}`, 't-err');
-      }
+    try {
+      envision = await readEnvision(transport, info, (m) => log(m));
+      log(`Envision / Fast Server: ${envision.text}`);
+    } catch (e) {
+      envision = { text: 'Not read', error: e.message };
+      log(`ESGe! failed: ${e.message}`, 't-err');
     }
 
     // Always read the ESP firmware. readEspVersion skips RN-131 itself, so the

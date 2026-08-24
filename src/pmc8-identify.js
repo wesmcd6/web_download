@@ -188,13 +188,21 @@ export function fastServerText({ able, boot, on }) {
 /**
  * Read Envision / Fast Server status.
  *
- * NOT part of identify(), and deliberately opt-in: despite looking like a
- * getter, ESGe! is not side-effect free. GET_ENVISION_CAPABLE sends AT and
- * AT+ENVISION? to the Wi-Fi module and, if the module replies ERROR, does
- * SET.setBYTE(ENVISION_BOOT, 0) followed by set.commit — an EEPROM write. It
- * can also block for up to ~2s waiting on the module.
+ * ESGe! is not strictly side-effect free, but the one write it can do is
+ * narrow and deliberate (GET_ENVISION_CAPABLE, firmware :6747-6802):
  *
- * Skipped entirely on RN-131, which the firmware reports as never capable.
+ *   - RN-131 returns immediately with no AT traffic and no write.
+ *   - Once ENVISION_ABLE / ENVISION_ON are known, later calls return from
+ *     cache without touching the module at all.
+ *   - Only when the module answers ERROR — i.e. it is not Envision-capable —
+ *     does it SET.setBYTE(ENVISION_BOOT, 0) + commit, clearing a boot flag
+ *     that is meaningless on such a module. The firmware comment says as
+ *     much: "if not capable clear the boot flag no matter it was".
+ *
+ * So the write only lands on hardware where the flag should not have been set,
+ * and only once. Safe to read as part of a normal identify.
+ *
+ * Skipped on RN-131, which the firmware reports as never capable anyway.
  */
 export async function readEnvision(transport, cfg, log = () => {}) {
   if (cfg.wifiType === 0) {
