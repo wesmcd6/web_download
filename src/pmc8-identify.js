@@ -26,9 +26,22 @@ const ENC = new TextEncoder();
 export const BAUD_RATES = [115200, 9600, 14400, 19200, 38400, 57600];
 
 /**
- * P9 -> mount model. The firmware prints P9 as DECIMAL in the ESGi reply but
- * parses it as HEX on input, so the printed "15" is P9 value 15 (0xF).
- * Read the field with parseInt(.., 10) — base 16 would silently mangle it.
+ * P9 -> mount model.
+ *
+ * IMPORTANT: P9 is only a stored default, and it is partly deprecated. It
+ * historically encoded BOTH the mount type and the Wi-Fi module type, and that
+ * mapping was never completed. The firmware now auto-detects the Wi-Fi module
+ * at every boot, but still falls back to P9 for the mount type. So:
+ *
+ *   - Wi-Fi module: use the `w` field. Auto-detected, reliable.
+ *   - Mount model:  P9 is the only source, but it is a setting someone
+ *                   configured, not a detection. It can be wrong.
+ *
+ * Never infer the Wi-Fi module from P9.
+ *
+ * The firmware prints P9 as DECIMAL in the ESGi reply but parses it as HEX on
+ * input, so the printed "15" is P9 value 15 (0xF). Read the field with
+ * parseInt(.., 10) — base 16 would silently mangle it.
  *
  * Settled by reading the full LOOKDOWN chain in the firmware, not one block:
  * later blocks reassign what earlier ones set.
@@ -129,20 +142,31 @@ export function settingsRows(cfg) {
       label: 'Mount Type',
       value: cfg.model,
       note: [
-        `P9 = ${cfg.p9}`,
+        `From P9 = ${cfg.p9} — a stored default, not a detection.`,
         model?.note,
+        'P9 is partly deprecated: it once encoded both mount and Wi-Fi type and ' +
+        'was never completed. The firmware now auto-detects Wi-Fi but still falls ' +
+        'back to P9 for the mount, so this can be wrong if P9 was never set right.',
         cfg.modelAmbiguous
-          ? 'P9 is never range-corrected at boot, so a corrupted setting is ' +
-            'indistinguishable from a genuine iEXOS-100 here.'
+          ? 'P9 is 0 and is never range-corrected at boot, so a corrupted setting ' +
+            'is indistinguishable from a genuine iEXOS-100 here.'
           : null,
-      ].filter(Boolean).join(' · '),
+      ].filter(Boolean).join(' '),
     },
     { label: 'Motor Current Slew, ma', value: String(cfg.slewCurrentMa) },
     { label: 'Motor Current Track, ma', value: String(cfg.trackCurrentMa) },
     { label: 'WiFi Channel', value: String(cfg.wifiChannel) },
     { label: 'ST4 Status', value: cfg.st4Disabled ? 'Disabled' : 'Enabled' },
     { label: 'ST4 Type', value: cfg.st4Analog ? 'Analog' : 'Digital' },
-    { label: 'WiFi Type', value: cfg.wifi, note: cfg.wifiCaveat },
+    {
+      label: 'WiFi Type',
+      value: cfg.wifi,
+      note: [
+        'Auto-detected by the PMC-8 at every boot — this is the reliable field, ' +
+        'not P9.',
+        cfg.wifiCaveat,
+      ].filter(Boolean).join(' '),
+    },
   ];
 }
 
