@@ -75,6 +75,7 @@
       <button id="upload" class="danger" disabled>Update firmware</button>
       <span id="uphint" class="t-dim"></span>
     </div>
+    <div id="upconfirm" style="margin-top:.6rem"></div>
     <progress id="prog" hidden></progress>
 
     <div class="row" style="margin-top:1.2rem">
@@ -493,14 +494,16 @@ function wireEditor(cfg, envision) {
       <div><strong>Write these to the mount's EEPROM?</strong></div>
       <ul style="margin:.6rem 0;padding-left:1.1rem">${list}</ul>
       <div class="row">
-        <button id="confirmwrite" class="danger">Yes, write to the mount</button>
-        <button id="cancelwrite">Cancel</button>
+        <button class="danger" data-act="go">Yes, write to the mount</button>
+        <button data-act="cancel">Cancel</button>
       </div>`;
     slog.appendChild(panel);
-    $('cancelwrite').addEventListener('click', () => {
+    // Scoped to this panel rather than looked up by id, so a duplicate cannot
+    // steal the click.
+    panel.querySelector('[data-act=cancel]').addEventListener('click', () => {
       slog.innerHTML = ''; put('Cancelled — nothing was written.', 't-dim');
     });
-    $('confirmwrite').addEventListener('click', () => doWrite(panel));
+    panel.querySelector('[data-act=go]').addEventListener('click', () => doWrite(panel));
   });
 
   async function doWrite(panel) {
@@ -673,6 +676,14 @@ async function runUpdate() {
 
 $('upload').addEventListener('click', () => {
   if (!image || !onSerial()) return;
+
+  // Render into a container directly under the button, and CLEAR it first.
+  // Appending to the log put the prompt below the command console, far from
+  // what triggered it, and every click stacked another copy — at which point
+  // getElementById bound the handlers to the wrong panel.
+  const host = $('upconfirm');
+  host.innerHTML = '';
+
   const panel = document.createElement('div');
   panel.className = 'notice bad';
   panel.innerHTML = `
@@ -680,16 +691,18 @@ $('upload').addEventListener('click', () => {
     <p style="margin:.5rem 0">This replaces the mount firmware permanently. Have a
        known-good image to hand, and do not disconnect during the burn.</p>
     <div class="row">
-      <button id="doit" class="danger">Yes, update the mount</button>
-      <button id="nope">Cancel</button>
+      <button class="danger" data-act="go">Yes, update the mount</button>
+      <button data-act="cancel">Cancel</button>
     </div>`;
-  logEl.hidden = false;
-  logEl.appendChild(panel);
-  $('nope').addEventListener('click', () => {
-    panel.remove(); log('Cancelled — nothing was written.', 't-dim');
+  host.appendChild(panel);
+
+  // Scoped to this panel, so a stale one can never capture the click.
+  panel.querySelector('[data-act=cancel]').addEventListener('click', () => {
+    host.innerHTML = '';
+    log('Cancelled — nothing was written.', 't-dim');
   });
-  $('doit').addEventListener('click', async () => {
-    panel.remove();
+  panel.querySelector('[data-act=go]').addEventListener('click', async () => {
+    host.innerHTML = '';
     $('upload').disabled = true;
     try { await runUpdate(); }
     catch (e) { log(`UPDATE FAILED: ${e.message}`, 't-err'); }
