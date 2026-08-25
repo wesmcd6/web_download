@@ -14,6 +14,11 @@
 
 * { box-sizing: border-box; }
 
+/* The UA rule is [hidden] { display: none }, which ANY class setting `display`
+   outbids — .status uses flex, so el.hidden did nothing and its spinner kept
+   running forever. Make hidden win. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   padding: 2rem 1.25rem 4rem;

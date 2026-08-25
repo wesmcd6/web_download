@@ -207,7 +207,12 @@ function settled(id, text, ok) {
   el.className = `status ${ok ? 't-ok' : 't-err'}`;
   el.textContent = text;
 }
-function clearStatus(id) { $(id).hidden = true; }
+function clearStatus(id) {
+  const el = $(id);
+  el.hidden = true;
+  el.className = 'status';   // drop `busy` so the spinner cannot survive
+  el.textContent = '';
+}
 
 /** Progress sink that both logs and keeps the on-screen line current. */
 const progressTo = (id) => (m) => { log(m); busy(id, m.trim()); };
@@ -253,7 +258,9 @@ let fwDone = false;
 /** Show the outcome next to the button, with the resulting version beneath. */
 function setFirmwareResult(ok, headline, detail) {
   fwDone = true;
-  clearStatus('upstatus');       // the verdict replaces the running commentary
+  // The verdict replaces the running commentary — stop every moving thing.
+  clearStatus('upstatus');
+  $('prog').hidden = true;
   const btn = $('upload');
   btn.textContent = ok ? 'FIRMWARE UPDATED' : 'UPDATE FAILED';
   btn.className = ok ? 'ok-btn' : 'danger';
