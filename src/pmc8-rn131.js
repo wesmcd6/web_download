@@ -22,9 +22,12 @@
  * and UFCT commits in batches rather than once at the end.
  */
 
-const ENC = new TextEncoder();
-const DEC = new TextDecoder('latin1');
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Exported because pmc8-network.js drives the same module through the same
+// passthrough. These helpers are hardware-proven; re-deriving them there would
+// mean re-learning the command-mode rules the hard way a second time.
+export const ENC = new TextEncoder();
+export const DEC = new TextDecoder('latin1');
+export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /** The factory configuration, batched exactly as UFCT commits it. */
 export const RN131_RESTORE_GROUPS = [
@@ -118,7 +121,7 @@ const INTERFERENCE = /\*OPEN\*|\*CLOS\*|ES[A-Z]/;
 /** Settle after writing before reading — UFCT waits 400ms, the Dashboard 300ms. */
 const SETTLE_MS = 400;
 
-async function line(transport, text, timeoutMs = 2000) {
+export async function line(transport, text, timeoutMs = 2000) {
   await transport.tx(ENC.encode(`${text}@`));
   // Give the module time to start answering. Reading immediately and breaking
   // at the first pause was catching the tail of the previous reply instead.
@@ -161,7 +164,7 @@ async function line(transport, text, timeoutMs = 2000) {
  * corrupt the next real command, which is exactly the `ERR: ?-Cmd` seen on the
  * first line of a restore.
  */
-async function inCommandMode(transport) {
+export async function inCommandMode(transport) {
   transport.flush();
   await transport.tx(ENC.encode('@'));
   const deadline = Date.now() + 900;
@@ -175,7 +178,7 @@ async function inCommandMode(transport) {
 }
 
 /** Clear any partial line left in the module's buffer. */
-async function clearLine(transport) {
+export async function clearLine(transport) {
   transport.flush();
   await transport.tx(ENC.encode('@'));
   await sleep(250);
@@ -183,7 +186,7 @@ async function clearLine(transport) {
 }
 
 /** Re-escape into command mode; returns true once the module answers CMD. */
-async function reenterCommandMode(transport) {
+export async function reenterCommandMode(transport) {
   transport.flush();
   await sleep(300);                       // WiFly wants a quiet guard time
   await transport.tx(ENC.encode('$$$'));

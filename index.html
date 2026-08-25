@@ -85,6 +85,43 @@
   </details>
 
   <!-- 4 ─────────────────────────────────────────────────────────────────── -->
+  <details class="card tool" id="s-network">
+    <summary>Network</summary>
+
+    <p style="margin-top:.9rem">Join the mount's Wi-Fi module to your home network, or
+       read the address it already has. <strong>USB only</strong> — Wi-Fi cannot
+       configure Wi-Fi, it would cut the link carrying the request.</p>
+
+    <div class="row" style="margin-top:.9rem">
+      <label>Wi-Fi module
+        <select id="netmodule" class="inp">
+          <option value="ESP32">ESP32</option>
+          <option value="ESP8266">ESP8266</option>
+          <option value="RN131">RN131</option>
+        </select>
+      </label>
+      <label>SSID
+        <input id="netssid" type="text" autocomplete="off" class="inp" style="width:12rem"
+               placeholder="Home Wi-Fi SSID">
+      </label>
+      <label>Password
+        <input id="netpass" type="password" autocomplete="off" class="inp" style="width:12rem"
+               placeholder="Home Wi-Fi password">
+      </label>
+    </div>
+
+    <div class="row" style="margin-top:.9rem">
+      <button id="netjoin" class="danger" disabled>Configure for home network</button>
+      <button id="netip" disabled>Get Wi-Fi address</button>
+      <span id="nethint" class="t-dim"></span>
+    </div>
+    <div id="netstatus" class="status" hidden></div>
+    <div id="netresult" class="verdict-detail" hidden></div>
+    <div id="netconfirm" style="margin-top:.6rem"></div>
+    <p id="netnote" class="t-dim" style="margin:.8rem 0 0"></p>
+  </details>
+
+  <!-- 5 ─────────────────────────────────────────────────────────────────── -->
   <details class="card tool" id="s-rn131">
     <summary>Restore RN131</summary>
 
@@ -113,7 +150,7 @@
     <progress id="rnprog" hidden></progress>
   </details>
 
-  <!-- 5 ─────────────────────────────────────────────────────────────────── -->
+  <!-- 6 ─────────────────────────────────────────────────────────────────── -->
   <details class="card tool" id="s-console">
     <summary>Command console</summary>
 
@@ -168,6 +205,7 @@ import {
 } from './src/pmc8-settings.js';
 import { COMMANDS, RISK_LABEL, buildCommand, classify } from './src/pmc8-commands.js';
 import { restoreRn131 } from './src/pmc8-rn131.js';
+import { readWifiAddress, configureHomeNetwork } from './src/pmc8-network.js';
 import { P1Loader } from './src/p1-loader.js';
 import { RUN_FROM_RAM, EEPROM_RUN, estimateSeconds, buildPayload } from './src/p1-protocol.js';
 
@@ -286,6 +324,7 @@ function refresh() {
     $('uphint').textContent = fwBlock ?? '';
   }
 
+  refreshNetwork();
   refreshRn131();
 }
 
@@ -910,7 +949,136 @@ $('upload').addEventListener('click', () => {
   });
 });
 
-// --- 4. restore RN131 -------------------------------------------------------
+// --- 4. network -------------------------------------------------------------
+
+/** Remember the module and SSID between visits; never the password. */
+const NET_KEY = 'pmc8.network';
+function loadNet() {
+  try {
+    const d = JSON.parse(localStorage.getItem(NET_KEY) ?? '{}');
+    if (d.module) $('netmodule').value = d.module;
+    if (d.ssid) $('netssid').value = d.ssid;
+  } catch { /* nothing saved, or unreadable */ }
+}
+function saveNet() {
+  try {
+    localStorage.setItem(NET_KEY, JSON.stringify({
+      module: $('netmodule').value, ssid: $('netssid').value.trim(),
+    }));
+  } catch { /* private mode, storage full — not worth reporting */ }
+}
+
+function refreshNetwork() {
+  const blocker = !hasSerial() ? 'Connect over USB first — this needs the cable.' : null;
+  $('netjoin').disabled = !!blocker || !$('netssid').value.trim();
+  $('netip').disabled = !!blocker;
+  $('nethint').textContent = blocker ?? ($('netssid').value.trim() ? '' : 'Enter an SSID.');
+
+  const m = $('netmodule').value;
+  // The mount tells us which module is fitted, so a mismatch is worth saying
+  // out loud rather than letting the wrong command set fail mysteriously.
+  const detected = lastInfo?.wifi;
+  const mismatch = detected && !detected.startsWith(m.replace('RN131', 'RN-131'));
+  $('netnote').innerHTML = m === 'RN131'
+    ? 'RN-131: spaces in the SSID or password are sent as "$" (WiFly convention). ' +
+      'Factory defaults are restored from the section below.'
+    : `${m}: no restore needed — the module returns to default on the next mount reboot.`
+    + (mismatch ? `<br><span class="t-warn">The mount reports ${esc(detected)}, ` +
+                  `not ${esc(m)}.</span>` : '');
+}
+
+$('netmodule').addEventListener('change', () => { saveNet(); refreshNetwork(); });
+$('netssid').addEventListener('input', () => { saveNet(); refreshNetwork(); });
+loadNet();
+
+function netVerdict(ok, headline, detail) {
+  clearStatus('netstatus');
+  const el = $('netresult');
+  el.hidden = false;
+  el.className = `verdict-detail ${ok ? 'good' : 'bad'}`;
+  el.innerHTML = `<strong>${esc(headline)}</strong>` +
+                 (detail ? `<br><span class="t-dim">${esc(detail)}</span>` : '');
+}
+
+$('netip').addEventListener('click', async () => {
+  const module = $('netmodule').value;
+  $('netip').disabled = true;
+  $('netresult').hidden = true;
+  busy('netstatus', `Reading the ${module} address…`);
+  try {
+    const r = await readWifiAddress(link, module, (m, cls) => { log(m, cls); busy('netstatus', m.trim()); });
+    if (r.ip) {
+      netVerdict(true, r.ip, r.apIp ? `Soft-AP address: ${r.apIp}` : null);
+      log(`Wi-Fi address: ${r.ip}`, 't-ok');
+      // Offer it straight to the Wi-Fi transport — that is what it is for.
+      $('mounthost').value = r.ip;
+      saveNet();
+    } else {
+      netVerdict(false, 'No address reported',
+        r.error ?? `Raw reply: ${(r.raw ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)}`);
+    }
+  } catch (e) {
+    log(e.message, 't-err');
+    netVerdict(false, 'Could not read the address', e.message);
+  } finally {
+    refreshNetwork();
+  }
+});
+
+$('netjoin').addEventListener('click', () => {
+  const module = $('netmodule').value;
+  const ssid = $('netssid').value.trim();
+  const host = $('netconfirm');
+  host.innerHTML = '';
+  const panel = document.createElement('div');
+  panel.className = 'notice';
+  panel.innerHTML = `
+    <div><strong>Point the ${esc(module)} at "${esc(ssid)}"?</strong></div>
+    <p style="margin:.5rem 0">This rewrites the module's Wi-Fi settings and reboots it.
+       ${module === 'RN131'
+         ? 'The soft AP at 192.168.47.1 is replaced by the home-network join.'
+         : 'The module returns to its default on the next mount reboot.'}</p>
+    <div class="row">
+      <button class="danger" data-act="go">Yes, configure it</button>
+      <button data-act="cancel">Cancel</button>
+    </div>`;
+  host.appendChild(panel);
+  panel.querySelector('[data-act=cancel]').addEventListener('click', () => {
+    host.innerHTML = '';
+    log('Cancelled — the module was not changed.', 't-dim');
+  });
+  panel.querySelector('[data-act=go]').addEventListener('click', async () => {
+    host.innerHTML = '';
+    $('netjoin').disabled = true;
+    $('netresult').hidden = true;
+    busy('netstatus', 'Starting…');
+    try {
+      const r = await configureHomeNetwork(
+        link, module, ssid, $('netpass').value,
+        (m, cls) => { log(m, cls); busy('netstatus', m.trim()); },
+        (step, total, what) => busy('netstatus', `${step}/${total} — ${what}`));
+
+      if (r.ok && r.ip) {
+        netVerdict(true, r.ip, `${module} joined "${ssid}". Use this address on the ` +
+                               'Connect section to reach the mount over Wi-Fi.');
+        $('mounthost').value = r.ip;
+        log(`Joined. Assigned IP: ${r.ip}`, 't-ok');
+      } else if (r.ok) {
+        netVerdict(false, 'Configured, but no address read', r.error ??
+          'The module may still be joining. Try Get Wi-Fi address in a moment.');
+      } else {
+        netVerdict(false, 'Could not configure the module', r.error);
+      }
+    } catch (e) {
+      log(e.message, 't-err');
+      netVerdict(false, 'Configure failed', e.message);
+    } finally {
+      refreshNetwork();
+    }
+  });
+});
+
+// --- 5. restore RN131 -------------------------------------------------------
 
 function refreshRn131() {
   if (rnDone) return;
