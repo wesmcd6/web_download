@@ -11,8 +11,10 @@
  *   motion  moves a motor
  *   reboot  restarts the controller or the Wi-Fi module
  *
- * Anything that is not `read` asks for confirmation before it is sent. Nothing
- * is blocked — this is a diagnostic console, not a guard rail.
+ * The label is shown next to the Send button. Nothing is blocked and nothing is
+ * confirmed — this is a diagnostic console for someone who knows the command
+ * set, and a prompt on every send would make it useless. The label exists so
+ * that a motion or reboot command is not a surprise, not to gate it.
  */
 
 export const COMMANDS = [

@@ -76,7 +76,6 @@
       <button id="send" class="primary">Send</button>
       <span id="cmdhint" class="t-dim"></span>
     </div>
-    <div id="cmdconfirm" style="margin-top:.6rem"></div>
   </details>
 
   <div id="log" hidden></div>
@@ -547,6 +546,10 @@ async function sendCommand(text) {
   }
 }
 
+// No confirmation gate. This is a diagnostic console for someone who knows the
+// command set; the risk label next to the button is the warning, and nagging on
+// every send would make it useless. The label still names motion and reboot
+// commands so nothing is a surprise.
 $('send').addEventListener('click', () => {
   let pending;
   try {
@@ -555,27 +558,7 @@ $('send').addEventListener('click', () => {
     log(e.message, 't-err');
     return;
   }
-  const { text, meta } = pending;
-  const risk = meta?.risk ?? 'unknown';
-  $('cmdconfirm').innerHTML = '';
-
-  if (risk === 'read') { sendCommand(text); return; }
-
-  // Anything that is not a pure read gets confirmed inline first.
-  const panel = document.createElement('div');
-  panel.className = 'notice bad';
-  panel.innerHTML = `
-    <div><strong>Send <code>${esc(text)}</code>?</strong></div>
-    <p style="margin:.5rem 0">${esc(meta
-      ? `${RISK_LABEL[risk]}. ${meta.note ?? ''}`
-      : 'This command is not in the known list, so what it does cannot be checked.')}</p>
-    <div class="row">
-      <button id="cmdyes" class="danger">Send it</button>
-      <button id="cmdno">Cancel</button>
-    </div>`;
-  $('cmdconfirm').appendChild(panel);
-  $('cmdno').addEventListener('click', () => { panel.remove(); });
-  $('cmdyes').addEventListener('click', () => { panel.remove(); sendCommand(text); });
+  sendCommand(pending.text);
 });
 
 $('go').addEventListener('click', async () => {
