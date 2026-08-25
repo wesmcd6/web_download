@@ -266,6 +266,25 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
     await line(transport, 'reboot', 800);
     bump('reboot');
   } finally {
+    // Leave the MODULE's command mode before leaving the Propeller's
+    // passthrough. Per the WiFly command reference: "exit <cr>" returns the
+    // module to data mode and it answers "EXIT". '###' closes passthrough only
+    // and does nothing to the module, so without this a module left in command
+    // mode has no data link until it reboots — and if the 'reboot' above was
+    // one of the unconfirmed lines, nothing brings it back.
+    try {
+      await transport.tx(ENC.encode('exit@'));
+      await sleep(300);
+      const bye = DEC.decode(await transport.rxTimeout(256, 400))
+        .replace(/[\r\n]+/g, ' ').trim();
+      log(/EXIT/i.test(bye)
+        ? '  module back in data mode (EXIT).'
+        : `  sent exit${bye ? ` — module said: ${bye}` : ' — no EXIT confirmation'}.`,
+        /EXIT/i.test(bye) ? 't-ok' : 't-warn');
+    } catch (e) {
+      log(`  could not leave the module's command mode: ${e.message}`, 't-err');
+    }
+
     // Always leave passthrough, whatever happened above — otherwise the mount
     // stays deaf to ES commands until it is power-cycled.
     log('Leaving passthrough (###)…');
