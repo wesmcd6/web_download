@@ -27,7 +27,7 @@
  * until reboot, even though nothing was committed to EEPROM.
  */
 
-import { ask, parseESGi } from './pmc8-identify.js';
+import { parseESGi } from './pmc8-identify.js';
 
 /** The twelve fields ESSi! actually writes, in wire order. */
 export const EDITABLE_FIELDS = [
@@ -190,11 +190,11 @@ export function displayValue(field, value) {
  * configuration after the write, so the caller can verify the change landed
  * rather than trusting the command.
  */
-export async function writeSettings(transport, values, log = () => {}) {
+export async function writeSettings(link, values, log = () => {}) {
   const sent = buildESSi(values);
   log(`Sending ${sent}`);
 
-  const raw = await ask(transport, sent, { expect: 'ESGi', timeoutMs: 4000 });
+  const raw = await link.send(sent, { expect: 'ESGi', timeoutMs: 4000 });
   const i = raw.indexOf('ESGi');
   if (i < 0) {
     return { accepted: false, sent, raw, error: 'No reply from the mount.' };

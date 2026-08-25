@@ -204,12 +204,12 @@ export function fastServerText({ able, boot, on }) {
  *
  * Skipped on RN-131, which the firmware reports as never capable anyway.
  */
-export async function readEnvision(transport, cfg, log = () => {}) {
+export async function readEnvision(link, cfg, log = () => {}) {
   if (cfg.wifiType === 0) {
     return { skipped: true, text: 'Not available on RN-131 modules.' };
   }
   log('Reading Envision / Fast Server status (ESGe!)…');
-  const raw = await ask(transport, 'ESGe!', { expect: 'ESGe', timeoutMs: 4000 });
+  const raw = await link.send('ESGe!', { expect: 'ESGe', timeoutMs: 4000 });
   const parsed = parseESGe(raw);
   if (!parsed) return { skipped: false, text: 'Unknown (no usable response).', raw };
   // Codes 4 and 6 are "on but not capable", which cannot happen.
@@ -436,7 +436,7 @@ export async function ask(transport, cmd, { timeoutMs = 2000, expect = null } = 
  * Full identify. Read-only: sends ESGv! and ESGi! and nothing else.
  * Never pulses reset — a mount mid-slew should not be interrupted.
  */
-export async function identify(transport, log = () => {}, { waitMs = 25000 } = {}) {
+export async function identify(link, log = () => {}, { waitMs = 25000 } = {}) {
   // Opening the serial port can itself reset the mount: the OS driver may
   // assert DTR before the page can de-assert it, and DTR is wired to the
   // Propeller's reset line. The firmware then takes 15-20s to boot, during
@@ -454,7 +454,7 @@ export async function identify(transport, log = () => {}, { waitMs = 25000 } = {
     log(attempt === 1
       ? 'Asking the mount for its firmware version (ESGv!)…'
       : `  no reply yet — the mount may be rebooting (${left}s left, attempt ${attempt})`);
-    vRaw = await ask(transport, 'ESGv!', { expect: 'ESGv', timeoutMs: 2000 });
+    vRaw = await link.send('ESGv!', { expect: 'ESGv', timeoutMs: 2000 });
     if (vRaw.includes('ESGv')) break;
     await sleep(700);
   }
@@ -469,7 +469,7 @@ export async function identify(transport, log = () => {}, { waitMs = 25000 } = {
   log(`Firmware: ${firmware}`);
 
   log('Asking the mount for its configuration (ESGi!)…');
-  const iRaw = await ask(transport, 'ESGi!', { expect: 'ESGi' });
+  const iRaw = await link.send('ESGi!', { expect: 'ESGi' });
   const cfg = parseESGi(iRaw);
   log(`Model: ${cfg.model}   Wi-Fi module: ${cfg.wifi}`);
 

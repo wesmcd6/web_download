@@ -21,6 +21,20 @@
        EEPROM, and asks first.</p>
     <p>Opening the port can make the mount reboot on its own, which takes 15–20&nbsp;seconds.
        If that happens this just keeps asking until it answers — leave it running.</p>
+    <div class="row" style="margin-bottom:.9rem">
+      <label>Connect over
+        <select id="how" style="font:inherit;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:.35rem .5rem">
+          <option value="serial">USB cable</option>
+          <option value="http">Wi-Fi</option>
+        </select>
+      </label>
+      <span id="wifibox" hidden>
+        <label>mount address
+          <input id="mounthost" type="text" inputmode="decimal" placeholder="192.168.1.50"
+                 style="font:inherit;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:.35rem .5rem;width:11rem">
+        </label>
+      </span>
+    </div>
     <div class="row">
       <button id="go" class="primary">Connect and read settings</button>
       <button id="disconnect" disabled>Disconnect</button>
@@ -35,7 +49,8 @@
 </main>
 
 <script type="module">
-import { SerialTransport, requestPort, isSupported, unsupportedReason } from './src/p1-serial.js';
+import { SerialTransport, requestPort } from './src/p1-serial.js';
+import { SerialLink, HttpLink, serialAvailable } from './src/mount-link.js';
 import {
   identify, settingsRows, readEnvision, readEspVersion,
 } from './src/pmc8-identify.js';
@@ -47,9 +62,10 @@ import {
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
 
-// One open port for the whole session — the read and any subsequent save share
-// it, so saving never re-prompts or resets the mount.
-let transport = null;
+// One connection for the whole session — the read and any subsequent save
+// share it, so saving never re-prompts or resets the mount. Either a
+// SerialLink (USB) or an HttpLink (Wi-Fi); everything above only calls send().
+let link = null;
 
 // Everything show() needs besides the config itself, so a successful save can
 // re-render with the mount's new values without re-reading the module.
@@ -64,12 +80,29 @@ function log(msg, cls = '') {
   logEl.scrollTop = logEl.scrollHeight;
 }
 
-if (!isSupported() || !window.isSecureContext) {
+// No Web Serial (iPhone, iPad, Android, Firefox, Safari) is not a dead end
+// here — Wi-Fi needs nothing but fetch(). Switch to it and explain, rather
+// than disabling the page.
+if (!serialAvailable()) {
   const el = $('unsupported');
   el.hidden = false;
-  el.textContent = unsupportedReason() ?? 'Web Serial is unavailable.';
-  $('go').disabled = true;
+  el.className = 'notice';
+  el.textContent =
+    'This browser cannot use a USB cable — Web Serial is desktop Chrome, Edge ' +
+    'and Opera only. Wi-Fi works fine: enter the mount\'s IP address below. ' +
+    (window.location.protocol === 'https:'
+      ? 'Note this page is on HTTPS, which browsers block from calling a ' +
+        'plain-HTTP mount — reload it over http:// instead.'
+      : '');
+  $('how').value = 'http';
+  $('how').querySelector('option[value=serial]').disabled = true;
 }
+
+function refreshHow() {
+  $('wifibox').hidden = $('how').value !== 'http';
+}
+$('how').addEventListener('change', refreshHow);
+refreshHow();
 
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
@@ -293,9 +326,9 @@ function wireEditor(cfg) {
     save.disabled = true;
 
     try {
-      if (!transport) throw new Error('Port is closed — read the settings first.');
+      if (!link) throw new Error('Not connected — read the settings first.');
 
-      const res = await writeSettings(transport, values, (m) => put(m));
+      const res = await writeSettings(link, values, (m) => put(m));
       if (!res.accepted) {
         put(res.error, 't-err');
         put(`Sent: ${res.sent}`, 't-dim');
@@ -337,29 +370,41 @@ $('go').addEventListener('click', async () => {
     // Open once and STAY open. Closing after the read meant Save had to call
     // requestPort() again — which re-opens the port, resets the mount via DTR,
     // and needs a fresh user gesture that a blocking confirm() may have
-    // already spent. The port stays open until Disconnect.
-    if (!transport) {
-      const port = await requestPort();
-      transport = new SerialTransport(port, { baudRate: 115200, log });
-      await transport.open();
+    // already spent. The connection stays up until Disconnect.
+    if (!link) {
+      if ($('how').value === 'http') {
+        link = new HttpLink($('mounthost').value);
+        log(`Connecting over ${link.label}…`);
+      } else {
+        const port = await requestPort();
+        const t = new SerialTransport(port, { baudRate: 115200, log });
+        await t.open();
+        link = new SerialLink(t);
+      }
     }
-    const info = await identify(transport, (m) => log(m));
+    const info = await identify(link, (m) => log(m));
 
     let envision = null;
     try {
-      envision = await readEnvision(transport, info, (m) => log(m));
+      envision = await readEnvision(link, info, (m) => log(m));
       log(`Envision / Fast Server: ${envision.text}`);
     } catch (e) {
       envision = { text: 'Not read', error: e.message };
       log(`ESGe! failed: ${e.message}`, 't-err');
     }
 
-    // Always read the ESP firmware. readEspVersion skips RN-131 itself, so the
-    // only mounts that reach passthrough are the ones it applies to.
+    // Always read the ESP firmware over USB. readEspVersion skips RN-131
+    // itself, so the only mounts that reach passthrough are the ones it
+    // applies to. Over Wi-Fi it is impossible by construction — passthrough
+    // would sever the very link carrying the request.
     let esp = null;
-    {
+    if (!link.canPassthrough) {
+      esp = { skipped: true, reason: 'Needs the USB cable — passthrough would ' +
+                                     'cut the Wi-Fi link it runs over.' };
+      log('ESP firmware: not readable over Wi-Fi.', 't-dim');
+    } else {
       try {
-        esp = await readEspVersion(transport, info, (m) => log(m));
+        esp = await readEspVersion(link.transport, info, (m) => log(m));
       } catch (e) {
         // Never let the module read take the whole report down with it.
         esp = { skipped: false, error: e.message };
@@ -381,19 +426,19 @@ $('go').addEventListener('click', async () => {
       }
     }
 
-    log('Done — nothing was written to the mount. Port stays open for saving.', 't-ok');
+    log('Done — nothing was written to the mount. Connection stays open for saving.', 't-ok');
     show(info, 115200, envision, esp);
   } catch (e) {
     log(e.message, 't-err');
   } finally {
     $('go').disabled = false;
-    $('disconnect').disabled = !transport;
+    $('disconnect').disabled = !link;
   }
 });
 
 $('disconnect').addEventListener('click', async () => {
-  if (transport) { await transport.close(); transport = null; }
-  log('Port closed.', 't-dim');
+  if (link) { await link.close(); link = null; }
+  log('Disconnected.', 't-dim');
   $('disconnect').disabled = true;
 });
 </script>
