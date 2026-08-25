@@ -50,7 +50,7 @@
 
 <script type="module">
 import { SerialTransport, requestPort } from './src/p1-serial.js';
-import { SerialLink, HttpLink, serialAvailable } from './src/mount-link.js';
+import { SerialLink, HttpLink, serialAvailable, normalizeHost } from './src/mount-link.js';
 import {
   identify, settingsRows, readEnvision, readEspVersion,
   setEnvisionBoot, fastServerText,
@@ -432,12 +432,26 @@ $('go').addEventListener('click', async () => {
   $('result').hidden = true;
   logEl.innerHTML = '';
   try {
+    // Drop a cached link that no longer matches what the form says. Building
+    // an HttpLink never touches the network, so a failed Wi-Fi attempt still
+    // leaves one cached — without this check, correcting a mistyped IP would
+    // keep retrying the old address.
+    const how = $('how').value;
+    const wantHost = how === 'http' ? normalizeHost($('mounthost').value) : null;
+    if (link && (link.kind !== how || (how === 'http' && link.host !== wantHost))) {
+      log(`Connection changed (${link.label} → ${how === 'http' ? wantHost : 'USB'}) ` +
+          '— dropping the old one.', 't-dim');
+      await link.close();
+      link = null;
+    }
+
     // Open once and STAY open. Closing after the read meant Save had to call
     // requestPort() again — which re-opens the port, resets the mount via DTR,
     // and needs a fresh user gesture that a blocking confirm() may have
     // already spent. The connection stays up until Disconnect.
+    const fresh = !link;
     if (!link) {
-      if ($('how').value === 'http') {
+      if (how === 'http') {
         link = new HttpLink($('mounthost').value);
         log(`Connecting over ${link.label}…`);
       } else {
@@ -447,7 +461,16 @@ $('go').addEventListener('click', async () => {
         link = new SerialLink(t);
       }
     }
-    const info = await identify(link, (m) => log(m));
+
+    let info;
+    try {
+      info = await identify(link, (m) => log(m));
+    } catch (e) {
+      // A link that never answered is not worth keeping. Drop it so the next
+      // attempt rebuilds from whatever the form says now.
+      if (fresh && link) { await link.close(); link = null; }
+      throw e;
+    }
 
     let envision = null;
     try {

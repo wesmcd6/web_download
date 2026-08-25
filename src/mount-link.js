@@ -42,12 +42,20 @@ export class SerialLink {
  * Wi-Fi. POSTs the raw command to the ESP32's /cmd endpoint and returns the
  * response body, matching HttpMountClient.SendCommandAsync in the PWA.
  */
+/**
+ * Normalise a typed-in mount address. Exported so callers can compare what the
+ * user has typed against an existing link's host without building one.
+ */
+export function normalizeHost(host) {
+  return String(host ?? '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+}
+
 export class HttpLink {
   /**
    * @param {string} host  "192.168.1.50" or "192.168.1.50:80"
    */
   constructor(host) {
-    const clean = String(host).trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    const clean = normalizeHost(host);
     if (!clean) throw new Error('Enter the mount\'s IP address.');
     this.host = clean;
     this.base = `http://${clean}`;
