@@ -105,8 +105,12 @@
                placeholder="Home Wi-Fi SSID">
       </label>
       <label>Password
-        <input id="netpass" type="password" autocomplete="off" class="inp" style="width:12rem"
-               placeholder="Home Wi-Fi password">
+        <span class="pw-wrap">
+          <input id="netpass" type="password" autocomplete="off" class="inp"
+                 placeholder="Home Wi-Fi password">
+          <button type="button" id="netpeek" class="pw-peek" aria-label="Show password"
+                  title="Show password">👁</button>
+        </span>
       </label>
     </div>
 
@@ -986,6 +990,19 @@ function refreshNetwork() {
     + (mismatch ? `<br><span class="t-warn">The mount reports ${esc(detected)}, ` +
                   `not ${esc(m)}.</span>` : '');
 }
+
+// Reveal the password on demand. Wi-Fi passwords are long and easy to mistype,
+// and a failed join looks identical whether the password was wrong or the
+// module was busy — so being able to check it is worth more than the masking.
+$('netpeek').addEventListener('click', () => {
+  const el = $('netpass');
+  const show = el.type === 'password';
+  el.type = show ? 'text' : 'password';
+  $('netpeek').textContent = show ? '🙈' : '👁';
+  $('netpeek').setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+  $('netpeek').title = show ? 'Hide password' : 'Show password';
+  $('netpeek').classList.toggle('on', show);
+});
 
 $('netmodule').addEventListener('change', () => { saveNet(); refreshNetwork(); });
 $('netssid').addEventListener('input', () => { saveNet(); refreshNetwork(); });
