@@ -7,8 +7,8 @@ Two pages:
 
 | Page | Risk | What it does |
 |---|---|---|
-| `identify.html` | **read-only** | Sends `ESGv!` and `ESGi!` and nothing else. Reports mount model, firmware version and **which Wi-Fi module is fitted** — the mount self-reports it. |
-| `loader.html` | staged, up to **permanent** | Loads Propeller (P1) mount firmware. Phases 0 and 1 write nothing; phase 2 is reversible by power cycle; phase 3 writes EEPROM. |
+| `/` (`index.html`) | **permanent** | Updates the Propeller (P1) mount firmware, then reads the version back to prove it took. Diagnostics live under Advanced. |
+| `identify.html` | reads freely, writes on request | Reports mount model, both firmware versions and **which Wi-Fi module is fitted**, and lets every stored setting be changed. Works over USB or Wi-Fi. |
 
 This is the **Propeller** — the mount's brain. The ESP32/ESP8266 Wi-Fi module is
 a separate processor with its own OTA path, and is out of scope here.
@@ -24,14 +24,13 @@ The DTR reset works from Web Serial, the LFSR seed and taps are correct, and the
 handshake completes in 178 ms returning Propeller version 1. Full capture in
 [docs/HARDWARE-LOG.md](docs/HARDWARE-LOG.md).
 
-**Phases 2 and 3: provisional pass.** A RAM→EEPROM load reported success and
-looked right, but a checksum ACK only proves the bytes arrived, not that the
-image runs. The loader now reads `ESGv!` back after any load and compares it
-against the version from Phase 0. **The definitive test is loading a different
-version and seeing the number change** — not yet done.
+**✅ Firmware loading is verified on hardware.** An old version was loaded, then
+a new one, and the reported version changed — which also settles the one thing
+that could not be settled by reading code: Chrome streams a single ~81 KB
+`write()` contiguously enough for the boot ROM.
 
-Settings read and write over USB are confirmed on hardware, and the Wi-Fi
-transport reads correctly.
+Settings read and write are confirmed over USB, and over Wi-Fi as well. The only
+thing Wi-Fi cannot do is `AT+GMR`, which needs passthrough.
 
 ## Run it
 
