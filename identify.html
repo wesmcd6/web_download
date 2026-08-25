@@ -23,6 +23,7 @@
        If that happens this just keeps asking until it answers — leave it running.</p>
     <div class="row">
       <button id="go" class="primary">Connect and read settings</button>
+      <button id="disconnect" disabled>Disconnect</button>
     </div>
   </div>
 
@@ -45,6 +46,10 @@ import {
 
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
+
+// One open port for the whole session — the read and any subsequent save share
+// it, so saving never re-prompts or resets the mount.
+let transport = null;
 
 function log(msg, cls = '') {
   logEl.hidden = false;
@@ -237,35 +242,51 @@ function wireEditor(cfg) {
   }
   refresh();
 
-  save.addEventListener('click', async () => {
-    const values = formValues();
-    const diff = changedFields(cfg, values);
+  const slog = $('savelog');
+  const put = (m, cls) => {
+    const d = document.createElement('div');
+    if (cls) d.className = cls;
+    d.textContent = m;
+    slog.appendChild(d);
+  };
+
+  // Confirm inline, not with window.confirm(). A native modal freezes the whole
+  // page while it sits there, which is how a pending write ends up looking like
+  // "nothing happened".
+  save.addEventListener('click', () => {
+    const diff = changedFields(cfg, formValues());
     if (!diff.length) return;
 
-    const summary = diff.map((d) =>
-      `  ${d.label}: ${displayValue(d, d.was)} -> ${displayValue(d, d.now)}`).join('\n');
-    const warns = diff.filter((d) => d.warn).map((d) => `\n! ${d.label}: ${d.warn}`).join('');
-    if (!confirm(`Write these settings to the mount's EEPROM?\n\n${summary}\n${warns}`)) return;
-
-    save.disabled = true;
-    const slog = $('savelog');
     slog.innerHTML = '';
-    const put = (m, cls) => {
-      const d = document.createElement('div');
-      if (cls) d.className = cls;
-      d.textContent = m;
-      slog.appendChild(d);
-    };
+    const panel = document.createElement('div');
+    panel.className = 'notice bad';
+    const list = diff.map((d) =>
+      `<li>${esc(d.label)}: <strong>${esc(displayValue(d, d.was))}</strong> → ` +
+      `<strong>${esc(displayValue(d, d.now))}</strong>${
+        d.warn ? `<br><span class="t-dim">${esc(d.warn)}</span>` : ''}</li>`).join('');
+    panel.innerHTML = `
+      <div><strong>Write these to the mount's EEPROM?</strong></div>
+      <ul style="margin:.6rem 0;padding-left:1.1rem">${list}</ul>
+      <div class="row">
+        <button id="confirmwrite" class="danger">Yes, write to the mount</button>
+        <button id="cancelwrite">Cancel</button>
+      </div>`;
+    slog.appendChild(panel);
 
-    let transport = null;
+    $('cancelwrite').addEventListener('click', () => {
+      slog.innerHTML = '';
+      put('Cancelled — nothing was written.', 't-dim');
+    });
+    $('confirmwrite').addEventListener('click', () => doWrite(panel));
+  });
+
+  async function doWrite(panel) {
+    const values = formValues();
+    panel.remove();
+    save.disabled = true;
+
     try {
-      const port = await requestPort();
-      transport = new SerialTransport(port, { baudRate: 115200, log });
-      await transport.open();
-
-      // The mount may have rebooted when the port opened.
-      put('Waiting for the mount to answer…');
-      await identify(transport, () => {});
+      if (!transport) throw new Error('Port is closed — read the settings first.');
 
       const res = await writeSettings(transport, values, (m) => put(m));
       if (!res.accepted) {
@@ -289,21 +310,25 @@ function wireEditor(cfg) {
     } catch (e) {
       put(e.message, 't-err');
     } finally {
-      if (transport) await transport.close();
       save.disabled = false;
     }
-  });
+  }
 }
 
 $('go').addEventListener('click', async () => {
   $('go').disabled = true;
   $('result').hidden = true;
   logEl.innerHTML = '';
-  let transport = null;
   try {
-    const port = await requestPort();
-    transport = new SerialTransport(port, { baudRate: 115200, log });
-    await transport.open();
+    // Open once and STAY open. Closing after the read meant Save had to call
+    // requestPort() again — which re-opens the port, resets the mount via DTR,
+    // and needs a fresh user gesture that a blocking confirm() may have
+    // already spent. The port stays open until Disconnect.
+    if (!transport) {
+      const port = await requestPort();
+      transport = new SerialTransport(port, { baudRate: 115200, log });
+      await transport.open();
+    }
     const info = await identify(transport, (m) => log(m));
 
     let envision = null;
@@ -342,14 +367,20 @@ $('go').addEventListener('click', async () => {
       }
     }
 
-    log('Done — nothing was written to the mount.', 't-ok');
+    log('Done — nothing was written to the mount. Port stays open for saving.', 't-ok');
     show(info, 115200, envision, esp);
   } catch (e) {
     log(e.message, 't-err');
   } finally {
-    if (transport) await transport.close();
     $('go').disabled = false;
+    $('disconnect').disabled = !transport;
   }
+});
+
+$('disconnect').addEventListener('click', async () => {
+  if (transport) { await transport.close(); transport = null; }
+  log('Port closed.', 't-dim');
+  $('disconnect').disabled = true;
 });
 </script>
 </body>

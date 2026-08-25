@@ -68,17 +68,28 @@ export const EDITABLE_FIELDS = [
   {
     key: 'p9', label: 'Mount Type', width: 2, kind: 'select',
     // Values are P9 as the firmware stores it; ESSi parses them in decimal.
+    //
+    // ALL SIXTEEN are listed, not just one per model. G-11 occupies 4-7 and
+    // EXOS-2 occupies 8-11, so a mount sitting on 5 or 9 is perfectly normal —
+    // offering only 4 and 8 would make its current value unselectable and
+    // wedge the form on a validation error it could not clear.
     options: [
+      { value: 0, label: 'iEXOS-100 (original board)' },
       { value: 1, label: 'iEXOS-100' },
       { value: 2, label: 'iEXOS-200' },
       { value: 3, label: 'iEXOS-300' },
       { value: 4, label: 'G-11' },
+      { value: 5, label: 'G-11 (5)' },
+      { value: 6, label: 'G-11 (6)' },
+      { value: 7, label: 'G-11 (7)' },
       { value: 8, label: 'EXOS-2' },
+      { value: 9, label: 'EXOS-2 (9)' },
+      { value: 10, label: 'EXOS-2 (10)' },
+      { value: 11, label: 'EXOS-2 (11)' },
       { value: 12, label: 'iEXOS-100 (Scotty)' },
       { value: 13, label: 'Titan' },
       { value: 14, label: 'MSR EQ' },
       { value: 15, label: 'ASKO SX260S' },
-      { value: 0, label: 'iEXOS-100 (original board)' },
     ],
     warn: 'Sets the mount model. Motor currents, sidereal rates and axis ' +
           'reversal all follow from this — setting it wrong will make the ' +
