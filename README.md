@@ -26,10 +26,9 @@ Protocol port is **complete and golden-vector tested** against the
 hardware-proven Python loader — including byte-identical encoding of the real
 29,584-byte `20A02.2.0.1.bt` image.
 
-**Phases 0 and 1 PASS on real hardware** (2026-08-24, Windows + Chrome, iEXOS-100).
-The DTR reset works from Web Serial, the LFSR seed and taps are correct, and the
-handshake completes in 178 ms returning Propeller version 1. Full capture in
-[docs/HARDWARE-LOG.md](docs/HARDWARE-LOG.md).
+**Verified on real hardware** (Windows + Chrome, iEXOS-100). The DTR reset works
+from Web Serial, the LFSR seed and taps are correct, and the handshake returns
+Propeller version 1 in 178 ms.
 
 **✅ Firmware loading is verified on hardware.** An old version was loaded, then
 a new one, and the reported version changed — which also settles the one thing
@@ -76,40 +75,46 @@ needs the UFCT checkout.
 ## Layout
 
 ```
-index.html            the whole app — four collapsible tools
+index.html            the whole app — six collapsible tools
 identify.html         redirect stub (old bookmarks)
 loader.html           redirect stub (old bookmarks)
 src/p1-protocol.js    pure protocol — LFSR, encoder, handshake builder
 src/p1-serial.js      Web Serial transport (reset, tx, buffered rx)
-src/p1-loader.js      loader orchestration + phase 0 listen
+src/p1-loader.js      loader orchestration + reset-and-listen
 src/pmc8-identify.js  ESGv!/ESGi!/ESGe! commands and parsers
 src/pmc8-settings.js  ESSi! builder + write/verify
-src/pmc8-commands.js  the ES command table, ported from the PMC8 Dashboard
+src/pmc8-commands.js  the ES command table
+src/pmc8-network.js   home-network join and address read
+src/pmc8-rn131.js     RN-131 factory restore
 src/mount-link.js     one send(command) interface over USB or Wi-Fi
 test/                 golden vectors + node test runner
-docs/DESIGN.md        why, architecture, what is verified vs not
 docs/PROTOCOL.md      the wire, in detail — read before touching the loader
-docs/FIRMWARE-NOTES.md  firmware-source findings, incl. the do-not-send list
 ```
 
-## Read these before changing anything
+## Read this before changing anything
 
-- **`docs/PROTOCOL.md` → "The contiguous-write risk".** The boot ROM aborts on
-  inter-byte gaps mid-image and silently falls back to the existing EEPROM
-  firmware. Encode before the handshake; one `write()` for the whole image;
-  never chunk it.
-- **`docs/FIRMWARE-NOTES.md` → "DO NOT SEND".** Several commands that look like
-  getters are not. `ESGe!` writes EEPROM. `ESM!` starts a motor. `%%%` disables
-  the ES command set.
-- **`THIRD_PARTY_NOTICES.md`.** MIT throughout, deliberately. Do not introduce a
-  GPL Propeller loader.
+**`docs/PROTOCOL.md` → "The contiguous-write risk".** The boot ROM aborts on
+inter-byte gaps mid-image and silently falls back to the existing EEPROM
+firmware. Encode before the handshake; one `write()` for the whole image; never
+chunk it.
 
-## Before this is published anywhere
+**`THIRD_PARTY_NOTICES.md`.** MIT throughout, deliberately. Do not introduce a
+GPL Propeller loader.
 
-A web page that loads firmware makes the host a firmware distribution channel.
-Settle these first — see `docs/DESIGN.md`:
+Several ES commands that look like getters are not — some write EEPROM, one
+starts a motor, and `%%%` disables the ES command set entirely. The command
+console labels each one; do not send anything from it that you have not checked.
+
+## Hosting
+
+A page that loads firmware makes its host a firmware distribution channel.
+Settle these before pointing anyone at a deployment:
 
 - versioned immutable URLs, never `latest.bin`
 - hash-check the image in the page and show the version before writing
 - decide who can publish
-- GitHub Pages off the releases repo is safer than a Shopify theme
+
+Note the two transports want opposite things from the origin: **Web Serial
+requires HTTPS**, and reaching a plain-HTTP mount requires the page **not** be
+HTTPS. A hosted copy can do USB; Wi-Fi needs the page served over `http://` on
+the same network.

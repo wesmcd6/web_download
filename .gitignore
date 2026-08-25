@@ -28,3 +28,9 @@ venv/
 downloads/
 tmp/
 *.log
+
+# Internal notes - kept locally, deliberately NOT published.
+# Firmware internals, hardware test logs and design/business context.
+docs/FIRMWARE-NOTES.md
+docs/HARDWARE-LOG.md
+docs/DESIGN.md
