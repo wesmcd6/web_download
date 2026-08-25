@@ -91,7 +91,11 @@ input[type=number] { width: 6rem; }
   padding: .8rem; height: 300px; overflow: auto; white-space: pre-wrap;
   word-break: break-word; margin-top: .75rem;
 }
+/* Red means something went WRONG. Advisory information — "this writes to
+   EEPROM", "this reboots the controller" — is amber, not red. Using red for
+   both trains people to ignore it. */
 .t-err { color: var(--danger); }
+.t-warn { color: var(--warn); }
 .t-ok { color: var(--ok); }
 .t-dim { color: var(--muted); }
 

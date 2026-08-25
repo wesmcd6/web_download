@@ -539,7 +539,7 @@ function wireEditor(cfg, envision) {
     }
     const total = diff.length + (bootChanged() ? 1 : 0);
     save.disabled = total === 0;
-    hint.className = total ? 't-err' : 't-dim';
+    hint.className = total ? 't-warn' : 't-dim';
     hint.textContent = total
       ? `${total} change${total > 1 ? 's' : ''} pending — this writes to EEPROM.`
       : 'Change a value to enable saving.';
@@ -557,7 +557,7 @@ function wireEditor(cfg, envision) {
     if (!diff.length && !bootChanged()) return;
     slog.innerHTML = '';
     const panel = document.createElement('div');
-    panel.className = 'notice bad';
+    panel.className = 'notice';   // amber: a caution before a deliberate act, not a failure
     let list = diff.map((d) =>
       `<li>${esc(d.label)}: <strong>${esc(displayValue(d, d.was))}</strong> → ` +
       `<strong>${esc(displayValue(d, d.now))}</strong>${
@@ -674,7 +674,7 @@ $('read').addEventListener('click', async () => {
       if (esp.rawGmr) log(`  raw AT+GMR:\n${esp.rawGmr}`, 't-dim');
       if (esp.leftEnvision) {
         log('NOTE: the mount was taken OUT of Envision mode to read this and has ' +
-            'been left that way.', 't-err');
+            'been left that way.', 't-warn');
       }
     }
 
@@ -733,7 +733,7 @@ async function runUpdate() {
   const before = await readVersion(link, 40, 'Reading the current version', 'upstatus');
   if (before) log(`Currently running: ${before}`, 't-ok');
   else log('No ESGv! answer. Continuing, but there will be no before-version to ' +
-           'compare against.', 't-err');
+           'compare against.', 't-warn');
 
   const payload = buildPayload(image, EEPROM_RUN);
   log(`Writing ${image.length} bytes (${image.length / 4} longs) → ${payload.length} ` +
@@ -799,7 +799,7 @@ $('upload').addEventListener('click', () => {
   host.innerHTML = '';
 
   const panel = document.createElement('div');
-  panel.className = 'notice bad';
+  panel.className = 'notice';   // amber: a caution before a deliberate act, not a failure
   panel.innerHTML = `
     <div><strong>Write this firmware to the mount's EEPROM?</strong></div>
     <p style="margin:.5rem 0">This replaces the mount firmware permanently. Have a
@@ -832,7 +832,8 @@ $('upload').addEventListener('click', () => {
 
 // --- 4. command console -----------------------------------------------------
 
-const RISK_CLASS = { read: 't-dim', write: 't-err', motion: 't-err', reboot: 't-err' };
+// Amber, not red: describing what a command does is information, not an error.
+const RISK_CLASS = { read: 't-dim', write: 't-warn', motion: 't-warn', reboot: 't-warn' };
 
 $('cmdsel').innerHTML = COMMANDS
   .map((c, i) => `<option value="${i}">${esc(c.key)} — ${esc(c.desc)}</option>`).join('');
@@ -867,7 +868,7 @@ function updateHint() {
     const risk = meta?.risk ?? 'unknown';
     $('cmdhint').textContent = `will send ${text}` +
       (typed ? (meta ? ` — ${RISK_LABEL[risk] ?? ''}` : ' — unrecognised command') : '');
-    $('cmdhint').className = risk === 'read' ? 't-dim' : 't-err';
+    $('cmdhint').className = risk === 'read' ? 't-dim' : 't-warn';
   } catch (e) {
     $('cmdhint').textContent = e.message;
     $('cmdhint').className = 't-dim';
