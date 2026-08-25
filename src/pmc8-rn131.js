@@ -204,30 +204,30 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
   if (entered) log(`  ${entered}`);
 
   // $$$ is the RN-131's Hayes-style escape. It takes no terminator, and the
-  // module wants a quiet period either side of it. It answers "CMD".
-  await sleep(300);
-  transport.flush();
-  await transport.tx(ENC.encode('$$$'));
-  let cmdMode = '';
-  const escDeadline = Date.now() + 2000;
-  while (Date.now() < escDeadline) {
-    const d = await transport.rxTimeout(256, 200);
-    if (d.length) cmdMode += DEC.decode(d);
-    if (/CMD/i.test(cmdMode)) break;
+  // module wants 250ms of quiet either side of it. It answers "CMD".
+  //
+  // The first attempt is routinely ignored — observed on hardware, where the
+  // opening $$$ produced no bytes at all and the identical retry a few seconds
+  // later answered CMD. So try the same proven path several times rather than
+  // giving up after one go and blaming the module.
+  let cmdMode = false;
+  for (let i = 1; i <= 3 && !cmdMode; i++) {
+    if (i > 1) log(`  no CMD — sending $$$ again (attempt ${i})…`, 't-warn');
+    cmdMode = await reenterCommandMode(transport);
   }
-  cmdMode = cmdMode.replace(/[\r\n]+/g, ' ').trim();
-  if (/CMD/i.test(cmdMode)) {
+  if (cmdMode) {
     log('  module is in command mode (CMD).', 't-ok');
   } else {
     // Not fatal — carry on and let the per-command replies tell the story —
     // but say so, because every command failing afterwards would otherwise be
     // a mystery rather than an obvious consequence.
-    log(`  no CMD from $$$${cmdMode ? ` (got: ${cmdMode})` : ''}. ` +
+    log('  no CMD from $$$ after three attempts. ' +
         'The module may not be in command mode.', 't-warn');
   }
 
   const silent = [];
   let sawInterference = false;
+  let rebooted = false;
   try {
     for (const group of RN131_RESTORE_GROUPS) {
       log(`${group.title}…`);
@@ -263,7 +263,8 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
     }
 
     log('Rebooting the module…');
-    await line(transport, 'reboot', 800);
+    const rb = await line(transport, 'reboot', 800);
+    rebooted = /Reboot|\*Reboot\*/i.test(rb.raw) || rb.ok;
     bump('reboot');
   } finally {
     // Leave the MODULE's command mode before leaving the Propeller's
@@ -277,10 +278,18 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
       await sleep(300);
       const bye = DEC.decode(await transport.rxTimeout(256, 400))
         .replace(/[\r\n]+/g, ' ').trim();
-      log(/EXIT/i.test(bye)
-        ? '  module back in data mode (EXIT).'
-        : `  sent exit${bye ? ` — module said: ${bye}` : ' — no EXIT confirmation'}.`,
-        /EXIT/i.test(bye) ? 't-ok' : 't-warn');
+      // No EXIT reply is expected when the reboot took — the module is
+      // restarting and command mode went with it. exit only matters as the
+      // fallback for a reboot that did not happen, so silence after a good
+      // reboot is normal, not a warning.
+      if (/EXIT/i.test(bye)) {
+        log('  module back in data mode (EXIT).', 't-ok');
+      } else if (rebooted) {
+        log('  no EXIT reply, as expected — the module is rebooting.', 't-dim');
+      } else {
+        log(`  sent exit${bye ? ` — module said: ${bye}` : ', no EXIT confirmation'}.`,
+            't-warn');
+      }
     } catch (e) {
       log(`  could not leave the module's command mode: ${e.message}`, 't-err');
     }
