@@ -478,8 +478,21 @@ $('go').addEventListener('click', async () => {
 
     // Prove the link before calling it connected. On a reused serial port this
     // answers immediately, which is the confirmation that holding it worked.
-    const v = await readVersion(link, fresh ? 40 : 10, 'Waiting for the mount', 'connstatus');
-    if (!v) throw new Error('The mount never answered ESGv!.');
+    //
+    // Wi-Fi gets a short window and no reset language: there is nothing to wait
+    // out, so either the mount answers or the address is wrong.
+    const overWifi = link.kind === 'http';
+    const v = await readVersion(
+      link,
+      overWifi ? 8 : (fresh ? 40 : 10),
+      overWifi ? `Contacting ${link.host}` : 'Waiting for the mount to reboot',
+      'connstatus');
+    if (!v) {
+      throw new Error(overWifi
+        ? `${link.host} answered, but not with an ESGv! reply. Check that this is ` +
+          'the mount\'s address and not another device on the network.'
+        : 'The mount never answered ESGv!.');
+    }
     log(`Connected. Mount firmware: ${v}`, 't-ok');
     settled('connstatus', `Connected over ${link.label}. Mount firmware: ${v}`, true);
   } catch (e) {
@@ -524,6 +537,11 @@ async function readVersion(target, seconds, why, statusId) {
   const send = target.send
     ? (c, o) => target.send(c, o)
     : (c, o) => ask(target, c, o);
+  // Waiting out silence is a SERIAL behaviour: opening the port resets the
+  // mount, so 15-20s of nothing is expected and polling is right. Over Wi-Fi
+  // nothing is being reset — a failed fetch means the address is unreachable,
+  // and polling it for 40s just imitates the USB reset wait for no reason.
+  const overWifi = target.kind === 'http';
   const deadline = Date.now() + seconds * 1000;
   let attempt = 0;
   while (Date.now() < deadline) {
@@ -534,7 +552,11 @@ async function readVersion(target, seconds, why, statusId) {
     try {
       const raw = await send('ESGv!', { expect: 'ESGv', timeoutMs: 2000 });
       if (raw.includes('ESGv')) return parseESGv(raw);
-    } catch { /* still down */ }
+    } catch (e) {
+      // HttpLink's message already names the address and the likely cause.
+      if (overWifi) throw e;
+      /* serial: still rebooting, keep waiting */
+    }
     await new Promise((r) => setTimeout(r, 700));
   }
   return null;
