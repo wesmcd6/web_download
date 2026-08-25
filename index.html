@@ -3,105 +3,172 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PMC-8 firmware loader</title>
+<title>PMC-Eight tools</title>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <main>
-  <h1>PMC-8 firmware loader</h1>
-  <p class="sub">Updates the Propeller (P1) mount firmware over USB. This is the
-     <strong>mount brain</strong>, not the Wi-Fi module.
-     &nbsp;·&nbsp; <a href="identify.html">Settings and mount info →</a></p>
+  <h1>PMC-Eight tools</h1>
+  <p class="sub">Talk to the mount over USB or Wi-Fi, straight from the browser.
+     Open a section to use it.</p>
 
-  <div id="unsupported" class="notice bad" hidden></div>
+  <div id="unsupported" class="notice" hidden></div>
 
-  <div class="card">
-    <h3>1 · Connect</h3>
-    <div class="row">
-      <button id="connect" class="primary">Choose serial port</button>
+  <!-- 1 ─────────────────────────────────────────────────────────────────── -->
+  <details class="card tool" id="s-connect" open>
+    <summary>Connect</summary>
+
+    <div class="row" style="margin-top:.9rem">
+      <label>over
+        <select id="how" class="inp">
+          <option value="serial">USB cable</option>
+          <option value="http">Wi-Fi</option>
+        </select>
+      </label>
+      <label>mount address
+        <input id="mounthost" type="text" inputmode="decimal" placeholder="192.168.1.50"
+               class="inp" style="width:11rem">
+      </label>
+      <span id="wifinote" class="t-dim"></span>
+    </div>
+
+    <div class="row" style="margin-top:.9rem">
+      <button id="go" class="primary">Connect</button>
+      <button id="disconnect" disabled>Disconnect</button>
       <span id="conn" class="t-dim">not connected</span>
     </div>
-    <p class="t-dim" style="margin:.7rem 0 0">Close UFCT, the PMC8 Dashboard and any
-       other serial tool first — Windows will not share the COM port. Opening the
-       port resets the mount, so it takes 15–20&nbsp;seconds to answer.</p>
-  </div>
 
-  <div class="card">
-    <h3>2 · Firmware image</h3>
+    <p class="t-dim" style="margin:.8rem 0 0">
+      <strong>USB resets the mount when the port opens</strong> — Windows asserts DTR
+      while configuring it, and DTR is the Propeller's reset line. Nothing in the
+      browser can prevent that, so the first 15–20&nbsp;seconds of "no reply yet" are
+      the mount rebooting. It happens once; the port then stays open.
+      <strong>Wi-Fi does not reset the mount</strong>, but cannot reach the ESP
+      firmware version or load firmware.</p>
+  </details>
+
+  <!-- 2 ─────────────────────────────────────────────────────────────────── -->
+  <details class="card tool" id="s-settings">
+    <summary>Get and change settings</summary>
+
+    <div class="row" style="margin-top:.9rem">
+      <button id="read" class="primary">Read settings from the mount</button>
+      <span id="readhint" class="t-dim"></span>
+    </div>
+
+    <div id="result" hidden></div>
+  </details>
+
+  <!-- 3 ─────────────────────────────────────────────────────────────────── -->
+  <details class="card tool" id="s-firmware">
+    <summary>Firmware upload</summary>
+
+    <span class="badge permanent" style="margin-top:.9rem">Permanent</span>
+    <p>Writes a new Propeller (P1) image to the mount's EEPROM and runs it, then reads
+       the version back to prove it took. This is the <strong>mount brain</strong>, not
+       the Wi-Fi module. <strong>USB only.</strong></p>
+
     <div class="row"><input type="file" id="file" accept=".binary,.bin"></div>
     <div id="fileinfo" class="t-dim" style="margin-top:.6rem">No image chosen.</div>
-  </div>
 
-  <div class="card">
-    <span class="badge permanent">Permanent</span>
-    <h3>3 · Update the mount</h3>
-    <p>Writes the image to the mount's EEPROM and runs it, then reads the version
-       back to prove it took. Do not disconnect during the burn.</p>
-    <div class="row">
-      <button id="go" class="danger" disabled>Update firmware</button>
-      <span id="gohint" class="t-dim"></span>
+    <div class="row" style="margin-top:.9rem">
+      <button id="upload" class="danger" disabled>Update firmware</button>
+      <span id="uphint" class="t-dim"></span>
     </div>
     <progress id="prog" hidden></progress>
-  </div>
 
-  <div id="log"></div>
-  <div class="row" style="margin-top:.6rem">
-    <button id="copy">Copy log</button>
-    <button id="clear">Clear</button>
-  </div>
-
-  <details class="card" style="margin-top:1.5rem">
-    <summary>Advanced — diagnostics and reset-line options</summary>
-
-    <p class="t-dim" style="margin:.9rem 0 .5rem">Only needed if an update fails.
-       The defaults match the loader already proven on this hardware.</p>
-
-    <div class="row">
-      <label>reset line
-        <select id="line"><option value="dtr">DTR (default)</option><option value="rts">RTS</option></select>
-      </label>
-      <label><input type="checkbox" id="invert"> invert polarity</label>
-      <label>assert ms <input type="number" id="resetMs" value="25" min="1" max="500"></label>
-      <label>settle ms <input type="number" id="settleMs" value="90" min="1" max="2000"></label>
-    </div>
-
-    <div class="row" style="margin-top:1rem">
+    <div class="row" style="margin-top:1.2rem">
       <button id="listen" disabled>Reset and listen</button>
       <button id="handshake" disabled>Handshake only</button>
       <button id="ramload" disabled>Load to RAM only</button>
     </div>
-    <p class="t-dim" style="margin:.7rem 0 0">
-      <strong>Reset and listen</strong> prints the boot splash and reads the version —
-      writes nothing.
-      <strong>Handshake only</strong> proves the reset wiring and the boot ROM are
+    <p class="t-dim" style="margin:.6rem 0 0">Diagnostics for a failed update.
+      <strong>Reset and listen</strong> prints the boot splash — writes nothing.
+      <strong>Handshake only</strong> proves the reset wiring and boot ROM are
       reachable — writes nothing.
-      <strong>Load to RAM only</strong> runs the image from RAM without touching
-      EEPROM, so a power cycle undoes it.</p>
+      <strong>Load to RAM only</strong> runs the image without touching EEPROM, so a
+      power cycle undoes it.</p>
   </details>
+
+  <!-- 4 ─────────────────────────────────────────────────────────────────── -->
+  <details class="card tool" id="s-console">
+    <summary>Command console</summary>
+
+    <p class="t-dim" style="margin:.9rem 0 0">Send any ES command and see the raw reply.</p>
+
+    <div class="row" style="margin-top:.9rem">
+      <label style="flex:1 1 100%">command
+        <select id="cmdsel" class="inp" style="width:100%;max-width:34rem"></select>
+      </label>
+    </div>
+    <div id="cmddesc" class="t-dim" style="margin:.5rem 0"></div>
+    <div id="cmdparams" class="row"></div>
+
+    <div class="row" style="margin-top:.9rem">
+      <label style="flex:1 1 100%">or type it yourself
+        <input id="cmdraw" type="text" autocomplete="off" spellcheck="false" placeholder="ESGv!"
+               class="inp mono" style="width:100%;max-width:34rem">
+      </label>
+    </div>
+    <p class="t-dim" style="margin:.4rem 0 0">Typing here overrides the selection above.</p>
+
+    <div class="row" style="margin-top:.9rem">
+      <button id="send" class="primary">Send</button>
+      <span id="cmdhint" class="t-dim"></span>
+    </div>
+  </details>
+
+  <div id="log" hidden></div>
+  <div class="row" style="margin-top:.6rem">
+    <button id="copy">Copy log</button>
+    <button id="clear">Clear</button>
+  </div>
 </main>
 
 <script type="module">
-import { SerialTransport, requestPort, isSupported, unsupportedReason } from './src/p1-serial.js';
+import { SerialTransport, requestPort } from './src/p1-serial.js';
+import { SerialLink, HttpLink, serialAvailable, normalizeHost } from './src/mount-link.js';
+import {
+  identify, settingsRows, readEnvision, readEspVersion,
+  setEnvisionBoot, fastServerText, ask, parseESGv,
+} from './src/pmc8-identify.js';
+import {
+  EDITABLE_FIELDS, READ_ONLY_FIELDS, currentValues, changedFields,
+  buildESSi, displayValue, writeSettings,
+} from './src/pmc8-settings.js';
+import { COMMANDS, RISK_LABEL, buildCommand, classify } from './src/pmc8-commands.js';
 import { P1Loader, resetAndListen } from './src/p1-loader.js';
 import { RUN_FROM_RAM, EEPROM_RUN, estimateSeconds, buildPayload } from './src/p1-protocol.js';
-import { ask, parseESGv } from './src/pmc8-identify.js';
 
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
-let port = null, transport = null, image = null;
 
-// The version reported before a load, so an update is proved by the version
-// CHANGING. A checksum ACK only says the bytes arrived — the image can land
-// and still not run.
-let versionBefore = null;
+// One connection for the whole page. Every tool shares it, so nothing re-prompts
+// for a port and the mount is reset once rather than per tool.
+let link = null;
+let image = null;
+
+// The last successful read, so reopening the settings section shows what we
+// already know instead of a blank panel.
+let lastInfo = null;
+const view = { baud: 115200, envision: null, esp: null };
 
 function log(msg, cls = '') {
+  logEl.hidden = false;
   const t = new Date().toISOString().slice(11, 23);
   const line = document.createElement('div');
   if (cls) line.className = cls;
   line.textContent = `${t}  ${msg}`;
   logEl.appendChild(line);
   logEl.scrollTop = logEl.scrollHeight;
+}
+
+const esc = (s) => String(s).replace(/[&<>]/g, (c) => (
+  { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+
+function row(k, v, extra) {
+  return `<tr><th>${esc(k)}</th><td class="val">${esc(v)}${
+    extra ? `<br><span class="t-dim">${esc(extra)}</span>` : ''}</td></tr>`;
 }
 
 function hexdump(bytes, max = 2048) {
@@ -117,58 +184,437 @@ function hexdump(bytes, max = 2048) {
   return out;
 }
 
-if (!isSupported() || !window.isSecureContext) {
+/** Serial-only tools need a SerialLink; Wi-Fi cannot carry them. */
+const onSerial = () => !!link && link.kind === 'serial';
+
+/** Enable/disable every tool according to what is connected and loaded. */
+function refresh() {
+  $('disconnect').disabled = !link;
+  $('conn').textContent = link ? `connected — ${link.label}` : 'not connected';
+  $('conn').className = link ? 't-ok' : 't-dim';
+
+  $('read').disabled = !link;
+  $('readhint').textContent = link ? '' : 'Connect first.';
+
+  $('send').disabled = !link;
+
+  const fwBlock = !onSerial() ? (link ? 'Firmware upload needs the USB cable.' : 'Connect over USB first.')
+                : !image ? 'Choose a firmware image.'
+                : null;
+  $('upload').disabled = !!fwBlock;
+  $('uphint').textContent = fwBlock ?? '';
+  $('listen').disabled = !onSerial();
+  $('handshake').disabled = !onSerial();
+  $('ramload').disabled = !onSerial() || !image;
+}
+
+if (!serialAvailable()) {
   const el = $('unsupported');
   el.hidden = false;
-  el.textContent = unsupportedReason() ?? 'Web Serial is unavailable.';
-  $('connect').disabled = true;
+  el.textContent =
+    'This browser cannot use a USB cable — Web Serial is desktop Chrome, Edge and ' +
+    'Opera only. Wi-Fi works fine: pick it below and enter the mount\'s address. ' +
+    'Firmware upload needs USB and will stay unavailable here. ' +
+    (window.location.protocol === 'https:'
+      ? 'This page is on HTTPS, which browsers block from calling a plain-HTTP ' +
+        'mount — reload it over http:// instead.'
+      : '');
+  $('how').value = 'http';
+  $('how').querySelector('option[value=serial]').disabled = true;
 }
 
-function opts() {
-  return {
-    useRts: $('line').value === 'rts',
-    invertDtr: $('invert').checked,
-    resetMs: Number($('resetMs').value),
-    settleMs: Number($('settleMs').value),
-    log,
-  };
+function refreshHow() {
+  const wifi = $('how').value === 'http';
+  $('mounthost').disabled = !wifi;
+  $('mounthost').style.opacity = wifi ? '1' : '0.4';
+  $('wifinote').textContent = wifi ? '' : '(Wi-Fi only)';
 }
-
-async function ensureOpen() {
-  if (transport) await transport.close();
-  transport = new SerialTransport(port, opts());
-  await transport.open();
-  return transport;
-}
-
-function refresh() {
-  const blocker = !port ? 'Select a serial port in step 1.'
-                : !image ? 'Choose a firmware image in step 2.'
-                : null;
-  $('go').disabled = !!blocker;
-  $('gohint').textContent = blocker ?? '';
-  for (const id of ['listen', 'handshake', 'ramload']) {
-    $(id).disabled = id === 'ramload' ? !!blocker : !port;
-  }
-}
+$('how').addEventListener('change', refreshHow);
+refreshHow();
 refresh();
 
-$('connect').addEventListener('click', async () => {
+// --- 1. connect -------------------------------------------------------------
+
+$('go').addEventListener('click', async () => {
+  const label = $('go').textContent;
+  $('go').disabled = true;
+  $('go').textContent = 'Connecting…';
   try {
-    port = await requestPort();
-    const i = port.getInfo?.() ?? {};
-    const id = i.usbVendorId != null
-      ? ` (VID ${i.usbVendorId.toString(16).padStart(4, '0')}:` +
-        `PID ${String(i.usbProductId ?? 0).toString(16).padStart(4, '0')})`
-      : '';
-    $('conn').textContent = `port selected${id}`;
-    $('conn').className = 't-ok';
-    log(`Port selected${id}.`);
-    refresh();
+    // Drop a cached link that no longer matches the form. Building an HttpLink
+    // never touches the network, so a failed Wi-Fi attempt still leaves one.
+    const how = $('how').value;
+    const wantHost = how === 'http' ? normalizeHost($('mounthost').value) : null;
+    if (link && (link.kind !== how || (how === 'http' && link.host !== wantHost))) {
+      log('Connection settings changed — dropping the old one.', 't-dim');
+      await link.close();
+      link = null;
+    }
+    if (link) { log(`Already connected over ${link.label}.`); return; }
+
+    if (how === 'http') {
+      link = new HttpLink($('mounthost').value);
+      log(`Connecting over ${link.label}…`);
+    } else {
+      const port = await requestPort();
+      const t = new SerialTransport(port, { baudRate: 115200, log });
+      try {
+        await t.open();
+      } catch (e) {
+        throw new Error(
+          `Could not open the serial port: ${e.message}. Windows will not share a ` +
+          'COM port — close UFCT, the PMC8 Dashboard or any other tool holding it.');
+      }
+      link = new SerialLink(t);
+      log('Port open. The mount is resetting; the next 15-20s of silence is expected.', 't-dim');
+    }
+
+    // Prove the link before calling it connected.
+    const v = await readVersion(link, 40, 'waiting for the mount');
+    if (!v) throw new Error('The mount never answered ESGv!.');
+    log(`Connected. Mount firmware: ${v}`, 't-ok');
   } catch (e) {
+    if (link) { try { await link.close(); } catch { /* already gone */ } link = null; }
     log(e.message, 't-err');
+  } finally {
+    $('go').disabled = false;
+    $('go').textContent = label;
+    refresh();
   }
 });
+
+$('disconnect').addEventListener('click', async () => {
+  if (link) { await link.close(); link = null; }
+  lastInfo = null;
+  $('result').hidden = true;
+  log('Disconnected.', 't-dim');
+  refresh();
+});
+
+/** Poll ESGv! until the firmware answers. */
+async function readVersion(target, seconds, why) {
+  const send = target.send
+    ? (c, o) => target.send(c, o)
+    : (c, o) => ask(target, c, o);
+  const deadline = Date.now() + seconds * 1000;
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt++;
+    const left = Math.ceil((deadline - Date.now()) / 1000);
+    log(`  ${why} — ESGv! attempt ${attempt} (${left}s left)`);
+    try {
+      const raw = await send('ESGv!', { expect: 'ESGv', timeoutMs: 2000 });
+      if (raw.includes('ESGv')) return parseESGv(raw);
+    } catch { /* still down */ }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+  return null;
+}
+
+// --- 2. settings ------------------------------------------------------------
+
+const INPUT_STYLE = 'font:inherit;background:var(--panel-2);color:var(--ink);' +
+                    'border:1px solid var(--line);border-radius:6px;padding:.3rem .45rem;';
+
+function editableRows(cfg) {
+  const now = currentValues(cfg);
+  return EDITABLE_FIELDS.map((f) => {
+    const v = now[f.key];
+    const control = f.kind === 'select'
+      ? `<select id="f_${f.key}" style="${INPUT_STYLE}">${
+          f.options.map((o) =>
+            `<option value="${o.value}"${Number(o.value) === Number(v) ? ' selected' : ''}>${
+              esc(o.label)}</option>`).join('')}</select>`
+      : `<input id="f_${f.key}" type="number" inputmode="numeric" min="${f.min}"
+              max="${f.max}" value="${esc(v)}" style="${INPUT_STYLE}width:7rem">`;
+    const note = f.key === 'p9' ? `P9 = ${cfg.p9}` : null;
+    return `<tr><th>${esc(f.label)}</th><td class="val">${control}${
+      note ? `<br><span class="t-dim">${esc(note)}</span>` : ''}</td></tr>`;
+  }).join('\n');
+}
+
+function readOnlyRows(cfg) {
+  return READ_ONLY_FIELDS.map((f) => row(
+    f.label,
+    f.key === 'st4Analog' ? (cfg.st4Analog ? 'Analog' : 'Digital') : cfg.wifi,
+    f.reason)).join('\n');
+}
+
+function show(info, baud, envision, esp) {
+  lastInfo = info;
+  view.baud = baud; view.envision = envision; view.esp = esp;
+  const el = $('result');
+  el.hidden = false;
+
+  let espFirmware, moduleHw = '', moduleDetail = '';
+  if (!esp) {
+    espFirmware = row('ESP firmware', 'Not read');
+  } else if (esp.skipped) {
+    espFirmware = row('ESP firmware',
+      esp.why === 'wifi' ? 'Not readable over Wi-Fi' : 'Not applicable — RN-131', esp.reason);
+  } else if (esp.gmr?.bin) {
+    espFirmware = row('ESP firmware', esp.gmr.bin,
+                      esp.gmr.esBranded ? null : 'Not an ES-branded build.');
+  } else {
+    espFirmware = row('ESP firmware', 'Not read',
+                      esp.error ?? 'AT+GMR did not return a Bin version line.');
+  }
+  const g = esp?.gmr;
+  if (g?.tag) {
+    moduleHw = row('Module hardware',
+      g.module ? `${g.module}  (${g.tag})` : `Unrecognized  (${g.tag})`,
+      g.module ? null : 'Tag did not match a known module — please report it.');
+  }
+  if (g?.at) moduleDetail += row('Module AT version', g.at);
+  if (g?.sdk) moduleDetail += row('Module SDK version', g.sdk);
+  if (g?.compileTime) moduleDetail += row('Module compiled', g.compileTime);
+  if (esp && !esp.skipped && esp.rawGmr && !g?.bin) moduleDetail += row('Raw AT+GMR', esp.rawGmr);
+  if (esp && !esp.skipped && !esp.esRestored) {
+    moduleDetail += row('Passthrough', 'ES commands did not answer after exit',
+                        'Power-cycle the mount.');
+  }
+  if (esp?.leftEnvision) {
+    moduleDetail += row('Envision', 'Turned OFF to read the module version',
+                        'Passthrough cannot run in Envision mode. The mount was left out of it.');
+  }
+
+  const fast = row('Envision / Fast Server', envision?.text ?? 'Not read',
+                   envision?.value != null ? `ESGe! = ${envision.value}` : null);
+
+  let bootRow = '';
+  if (envision && envision.value != null) {
+    bootRow = `<tr><th>Boot into Envision</th><td class="val">
+      <select id="f_envboot" style="${INPUT_STYLE}">
+        <option value="1"${envision.boot ? ' selected' : ''}>On</option>
+        <option value="0"${envision.boot ? '' : ' selected'}>Off</option>
+      </select>${envision.able ? '' :
+        '<br><span class="t-dim">This module is not Envision-capable, so the flag ' +
+        'has no effect until its Wi-Fi firmware is updated.</span>'}</td></tr>`;
+  } else if (envision?.skipped) {
+    bootRow = row('Boot into Envision', 'Not available', envision.text);
+  }
+
+  el.innerHTML = `
+    <table style="margin-top:1rem">
+      ${row('Mount firmware', info.firmware)}
+      ${espFirmware}
+      ${moduleHw}
+      ${editableRows(info)}
+      ${readOnlyRows(info)}
+      ${fast}
+      ${bootRow}
+      ${moduleDetail}
+      ${row('Raw ESGi', info.raw)}
+    </table>
+    <div class="row" style="margin-top:1rem">
+      <button id="save" class="danger" disabled>Save to mount</button>
+      <span id="savehint" class="t-dim">Change a value to enable saving.</span>
+    </div>
+    <div id="savelog" style="margin-top:.6rem"></div>
+    <div class="row" style="margin-top:1rem">
+      <button id="copycfg">Copy as text</button>
+    </div>`;
+
+  wireEditor(info, envision);
+
+  $('copycfg').addEventListener('click', () => {
+    const lines = [`Mount firmware: ${info.firmware}`];
+    if (esp?.skipped) lines.push(`ESP firmware: ${esp.why === 'wifi' ? 'not readable over Wi-Fi' : 'not applicable — RN-131'}`);
+    else if (g?.bin) lines.push(`ESP firmware: ${g.bin}`);
+    if (g?.tag) lines.push(`Module hardware: ${g.module ?? 'unrecognized'} (${g.tag})`);
+    for (const r of settingsRows(info)) lines.push(`${r.label}: ${r.value}`);
+    if (envision) lines.push(`Envision / Fast Server: ${envision.text}`);
+    lines.push(`Raw ESGi: ${info.raw}`);
+    navigator.clipboard.writeText(lines.join('\n'));
+    $('copycfg').textContent = 'Copied';
+    setTimeout(() => { $('copycfg').textContent = 'Copy as text'; }, 1500);
+  });
+}
+
+function formValues() {
+  const out = {};
+  for (const f of EDITABLE_FIELDS) out[f.key] = $(`f_${f.key}`).value;
+  return out;
+}
+
+function wireEditor(cfg, envision) {
+  const save = $('save');
+  const hint = $('savehint');
+  const bootEl = $('f_envboot');
+  const bootWas = envision?.boot ? 1 : 0;
+  const bootNow = () => (bootEl ? Number(bootEl.value) : bootWas);
+  const bootChanged = () => !!bootEl && bootNow() !== bootWas;
+  const slog = $('savelog');
+  const put = (m, cls) => {
+    const d = document.createElement('div');
+    if (cls) d.className = cls;
+    d.textContent = m;
+    $('savelog').appendChild(d);
+  };
+
+  const refreshSave = () => {
+    let diff;
+    try {
+      diff = changedFields(cfg, formValues());
+      buildESSi(formValues());
+    } catch (e) {
+      save.disabled = true; hint.textContent = e.message; hint.className = 't-err';
+      return;
+    }
+    const total = diff.length + (bootChanged() ? 1 : 0);
+    save.disabled = total === 0;
+    hint.className = total ? 't-err' : 't-dim';
+    hint.textContent = total
+      ? `${total} change${total > 1 ? 's' : ''} pending — this writes to EEPROM.`
+      : 'Change a value to enable saving.';
+  };
+
+  for (const f of EDITABLE_FIELDS) {
+    $(`f_${f.key}`).addEventListener('input', refreshSave);
+    $(`f_${f.key}`).addEventListener('change', refreshSave);
+  }
+  if (bootEl) bootEl.addEventListener('change', refreshSave);
+  refreshSave();
+
+  save.addEventListener('click', () => {
+    const diff = changedFields(cfg, formValues());
+    if (!diff.length && !bootChanged()) return;
+    slog.innerHTML = '';
+    const panel = document.createElement('div');
+    panel.className = 'notice bad';
+    let list = diff.map((d) =>
+      `<li>${esc(d.label)}: <strong>${esc(displayValue(d, d.was))}</strong> → ` +
+      `<strong>${esc(displayValue(d, d.now))}</strong>${
+        d.warn ? `<br><span class="t-dim">${esc(d.warn)}</span>` : ''}</li>`).join('');
+    if (bootChanged()) {
+      list += `<li>Boot into Envision: <strong>${bootWas ? 'On' : 'Off'}</strong> → ` +
+              `<strong>${bootNow() ? 'On' : 'Off'}</strong></li>`;
+    }
+    panel.innerHTML = `
+      <div><strong>Write these to the mount's EEPROM?</strong></div>
+      <ul style="margin:.6rem 0;padding-left:1.1rem">${list}</ul>
+      <div class="row">
+        <button id="confirmwrite" class="danger">Yes, write to the mount</button>
+        <button id="cancelwrite">Cancel</button>
+      </div>`;
+    slog.appendChild(panel);
+    $('cancelwrite').addEventListener('click', () => {
+      slog.innerHTML = ''; put('Cancelled — nothing was written.', 't-dim');
+    });
+    $('confirmwrite').addEventListener('click', () => doWrite(panel));
+  });
+
+  async function doWrite(panel) {
+    const values = formValues();
+    const wantBoot = bootNow();
+    const doBoot = bootChanged();
+    const doEssi = changedFields(cfg, values).length > 0;
+    panel.remove();
+    save.disabled = true;
+    try {
+      if (!link) throw new Error('Not connected.');
+
+      // Separate command from ESSi, sent first so a later ESSi rejection does
+      // not hide the fact that this one landed.
+      if (doBoot) {
+        const r = await setEnvisionBoot(link, !!wantBoot, (m) => put(m));
+        if (!r.ok) put(`Boot into Envision: ${r.error}`, 't-err');
+        else {
+          put(`Boot into Envision is now ${wantBoot ? 'ON' : 'OFF'}` +
+              (r.verified ? ' (confirmed by ESGe!).' : ' (not read back).'), 't-ok');
+          if (r.envision) view.envision = { ...r.envision, text: fastServerText(r.envision) };
+        }
+      }
+
+      if (!doEssi) {
+        show({ ...cfg }, view.baud, view.envision, view.esp);
+        put('Done.', 't-ok');
+        return;
+      }
+
+      const res = await writeSettings(link, values, (m) => put(m));
+      if (!res.accepted) {
+        put(res.error, 't-err');
+        put(`Sent: ${res.sent}`, 't-dim');
+        if (res.raw) put(`Reply: ${JSON.stringify(res.raw)}`, 't-dim');
+      } else {
+        const after = changedFields(res.cfg, values);
+        // Re-render from the mount's echo so the baseline resets and the pending
+        // warning clears itself.
+        show({ firmware: cfg.firmware, ...res.cfg }, view.baud, view.envision, view.esp);
+        if (after.length) {
+          put('The mount accepted the command but some values did not stick:', 't-err');
+          for (const d of after) {
+            put(`  ${d.label}: asked for ${displayValue(d, d.now)}, ` +
+                `mount reports ${displayValue(d, d.was)}`, 't-err');
+          }
+        } else put('Saved. The mount echoed back every value as requested.', 't-ok');
+        put(`New raw ESGi: ${res.cfg.raw}`, 't-dim');
+        return;
+      }
+    } catch (e) {
+      put(e.message, 't-err');
+    } finally {
+      save.disabled = false;
+    }
+  }
+}
+
+$('read').addEventListener('click', async () => {
+  $('read').disabled = true;
+  try {
+    if (!link) throw new Error('Connect first.');
+    const info = await identify(link, (m) => log(m));
+
+    let envision = null;
+    try {
+      envision = await readEnvision(link, info, (m) => log(m));
+      log(`Envision / Fast Server: ${envision.text}`);
+    } catch (e) {
+      envision = { text: 'Not read', error: e.message };
+      log(`ESGe! failed: ${e.message}`, 't-err');
+    }
+
+    let esp;
+    if (!link.canPassthrough) {
+      esp = { skipped: true, why: 'wifi',
+              reason: 'Reading it needs passthrough, which would cut the Wi-Fi link ' +
+                      'carrying the request. Connect over USB to see this.' };
+      log('ESP firmware: not readable over Wi-Fi.', 't-dim');
+    } else {
+      try {
+        esp = await readEspVersion(link, info, (m) => log(m));
+      } catch (e) {
+        esp = { skipped: false, error: e.message };
+        log(`ESP firmware read failed: ${e.message}`, 't-err');
+      }
+      if (esp.skipped) log(`ESP firmware skipped: ${esp.reason}`, 't-dim');
+      else if (esp.error) log(`AT+GMR: ${esp.error}`, 't-err');
+      else log(`Module bin version: ${esp.gmr?.bin ?? '(unknown)'}`, 't-ok');
+      if (esp.rawGmr) log(`  raw AT+GMR:\n${esp.rawGmr}`, 't-dim');
+      if (esp.leftEnvision) {
+        log('NOTE: the mount was taken OUT of Envision mode to read this and has ' +
+            'been left that way.', 't-err');
+      }
+    }
+
+    show(info, view.baud, envision, esp);
+    log('Settings read.', 't-ok');
+  } catch (e) {
+    log(e.message, 't-err');
+  } finally {
+    refresh();
+  }
+});
+
+// Reopening the section shows what was already read rather than a blank panel.
+$('s-settings').addEventListener('toggle', () => {
+  if ($('s-settings').open && lastInfo) {
+    $('result').hidden = false;
+    $('readhint').textContent = 'Showing the last read. Read again to refresh.';
+  }
+});
+
+// --- 3. firmware ------------------------------------------------------------
 
 $('file').addEventListener('change', async (ev) => {
   const f = ev.target.files[0];
@@ -185,184 +631,191 @@ $('file').addEventListener('change', async (ev) => {
     image = null;
   }
   $('fileinfo').innerHTML =
-    `<strong>${f.name}</strong> — ${image ? image.length : f.size} bytes` +
+    `<strong>${esc(f.name)}</strong> — ${image ? image.length : f.size} bytes` +
     `${image ? ` (${image.length / 4} longs)` : ''}<br>SHA-256 ${hash}<br>${note}`;
   log(`Image: ${f.name}, ${f.size} bytes, sha256 ${hash}`);
   refresh();
 });
 
-/**
- * Ask the running firmware its version. The only real proof a load worked —
- * the boot ROM's ACK says the bytes arrived and checksummed, nothing more.
- * Polls because the mount has to boot first.
- */
-async function readVersion(t, seconds, why) {
-  const deadline = Date.now() + seconds * 1000;
-  let attempt = 0;
-  while (Date.now() < deadline) {
-    attempt++;
-    const left = Math.ceil((deadline - Date.now()) / 1000);
-    log(`  ${why} — ESGv! attempt ${attempt} (${left}s left)`);
-    try {
-      const raw = await ask(t, 'ESGv!', { expect: 'ESGv', timeoutMs: 2000 });
-      if (raw.includes('ESGv')) return parseESGv(raw);
-    } catch { /* still booting */ }
-    await new Promise((r) => setTimeout(r, 700));
-  }
-  return null;
-}
-
-/** The whole update, with every check folded in and reported to the log. */
 async function runUpdate() {
-  const t = await ensureOpen();
+  const t = link.transport;
 
   log('Reading the current firmware version…');
-  versionBefore = await readVersion(t, 40, 'waiting for the mount');
-  if (versionBefore) log(`Currently running: ${versionBefore}`, 't-ok');
-  else log('The mount never answered ESGv!. Continuing, but there will be no ' +
-           'before-version to compare against.', 't-err');
+  const before = await readVersion(link, 40, 'waiting for the mount');
+  if (before) log(`Currently running: ${before}`, 't-ok');
+  else log('No ESGv! answer. Continuing, but there will be no before-version to ' +
+           'compare against.', 't-err');
 
-  const longs = image.length / 4;
   const payload = buildPayload(image, EEPROM_RUN);
-  log(`Writing ${image.length} bytes (${longs} longs) → ${payload.length} encoded, ` +
-      `~${estimateSeconds(payload.length).toFixed(1)}s on the wire.`);
+  log(`Writing ${image.length} bytes (${image.length / 4} longs) → ${payload.length} ` +
+      `encoded, ~${estimateSeconds(payload.length).toFixed(1)}s on the wire.`);
 
   $('prog').hidden = false;
-  const loader = new P1Loader(t, (m) => log(`  ${m}`));
-  const { version, seconds } = await loader.load(image, EEPROM_RUN);
+  const { version, seconds } = await new P1Loader(t, (m) => log(`  ${m}`))
+    .load(image, EEPROM_RUN);
   $('prog').hidden = true;
   log(`Transfer complete in ${seconds.toFixed(1)}s (chip version ${version}).`, 't-ok');
 
-  const after = await readVersion(t, 40, 'waiting for the new firmware to boot');
+  const after = await readVersion(link, 40, 'waiting for the new firmware to boot');
   if (!after) {
-    log('The transfer was acknowledged but the mount never answered ESGv!. ' +
-        'The image may have landed without running — do NOT treat this as a ' +
-        'successful update.', 't-err');
-  } else if (versionBefore && after === versionBefore) {
+    log('The transfer was acknowledged but the mount never answered ESGv!. The image ' +
+        'may have landed without running — do NOT treat this as a successful update.', 't-err');
+  } else if (before && after === before) {
     log(`Firmware still reports ${after} — unchanged.`, 't-err');
-    log('  If you loaded a different version this did NOT take effect. If you ' +
-        'reloaded the same version, unchanged is expected and proves nothing.', 't-dim');
-  } else if (versionBefore) {
-    log(`UPDATE VERIFIED — firmware changed  ${versionBefore}  →  ${after}`, 't-ok');
+    log('  If you loaded a different version this did NOT take effect. If you reloaded ' +
+        'the same version, unchanged is expected and proves nothing.', 't-dim');
+  } else if (before) {
+    log(`UPDATE VERIFIED — firmware changed  ${before}  →  ${after}`, 't-ok');
   } else {
     log(`Firmware now reports: ${after}`, 't-ok');
-    log('  No before-version was captured, so this shows what is running but ' +
-        'does not prove it changed.', 't-dim');
   }
 }
 
-// Inline confirmation, never window.confirm() — a native modal freezes the page
-// while it sits there, which makes a pending write look like nothing happened.
-$('go').addEventListener('click', () => {
-  if (!image || !port) return;
-  logEl.innerHTML = '';
+$('upload').addEventListener('click', () => {
+  if (!image || !onSerial()) return;
   const panel = document.createElement('div');
   panel.className = 'notice bad';
   panel.innerHTML = `
     <div><strong>Write this firmware to the mount's EEPROM?</strong></div>
     <p style="margin:.5rem 0">This replaces the mount firmware permanently. Have a
-       known-good image to hand before continuing, and do not disconnect during
-       the burn.</p>
+       known-good image to hand, and do not disconnect during the burn.</p>
     <div class="row">
       <button id="doit" class="danger">Yes, update the mount</button>
       <button id="nope">Cancel</button>
     </div>`;
+  logEl.hidden = false;
   logEl.appendChild(panel);
-
   $('nope').addEventListener('click', () => {
-    panel.remove();
-    log('Cancelled — nothing was written.', 't-dim');
+    panel.remove(); log('Cancelled — nothing was written.', 't-dim');
   });
-
   $('doit').addEventListener('click', async () => {
     panel.remove();
-    $('go').disabled = true;
-    try {
-      await runUpdate();
-    } catch (e) {
-      log(`UPDATE FAILED: ${e.message}`, 't-err');
-    } finally {
-      $('prog').hidden = true;
-      await transport?.close(); transport = null;
-      refresh();
-    }
+    $('upload').disabled = true;
+    try { await runUpdate(); }
+    catch (e) { log(`UPDATE FAILED: ${e.message}`, 't-err'); }
+    finally { $('prog').hidden = true; refresh(); }
   });
 });
-
-// --- advanced diagnostics ---------------------------------------------------
 
 $('listen').addEventListener('click', async () => {
   $('listen').disabled = true;
   try {
-    const t = await ensureOpen();
-    log('Reset and listen…');
-    const r = await resetAndListen(t, { progress: (m) => log(`  ${m}`) });
+    const r = await resetAndListen(link.transport, { progress: (m) => log(`  ${m}`) });
     if (!r.splash.length) {
-      log('SILENT. Normal firmware prints a boot splash, so this points at the ' +
-          'wrong reset line or polarity, the wrong baud, or the port being held ' +
-          'elsewhere.', 't-err');
+      log('SILENT. Normal firmware prints a boot splash, so this points at the wrong ' +
+          'reset line or polarity, the wrong baud, or the port being held elsewhere.', 't-err');
     } else {
       log(`${r.splash.length} bytes of boot output:`, 't-ok');
       log(hexdump(r.splash));
       if (r.p9 !== null) log(`  splash reports Mount Type: P9 = ${r.p9}`);
       if (r.wifiLine) log(`  splash reports Wi-Fi module: ${r.wifiLine}`);
     }
-    if (r.versionConfirmed) {
-      versionBefore = r.firmware;
-      log(`ESGv! answered: ${r.firmware}`, 't-ok');
-    } else if (r.firmware) {
-      log(`ESGv! did not answer. Splash banner reads ${r.firmware}.`, 't-err');
-    } else {
-      log(`ESGv! did not answer: ${r.versionError}`, 't-err');
-    }
-  } catch (e) {
-    log(e.message, 't-err');
-  } finally {
-    await transport?.close(); transport = null;
-    refresh();
-  }
+    log(r.versionConfirmed ? `ESGv! answered: ${r.firmware}`
+                           : `ESGv! did not answer: ${r.versionError}`,
+        r.versionConfirmed ? 't-ok' : 't-err');
+  } catch (e) { log(e.message, 't-err'); } finally { refresh(); }
 });
 
 $('handshake').addEventListener('click', async () => {
   $('handshake').disabled = true;
   try {
-    const t = await ensureOpen();
-    log('Handshake…');
-    const v = await new P1Loader(t, (m) => log(`  ${m}`)).handshake();
+    const v = await new P1Loader(link.transport, (m) => log(`  ${m}`)).handshake();
     log(v === 1
       ? 'HANDSHAKE OK — Propeller version 1. Reset wiring, polarity and encoder confirmed.'
       : `Handshake completed but version is ${v}, expected 1.`, v === 1 ? 't-ok' : 't-err');
-  } catch (e) {
-    log(e.message, 't-err');
-  } finally {
-    await transport?.close(); transport = null;
-    refresh();
-  }
+  } catch (e) { log(e.message, 't-err'); } finally { refresh(); }
 });
 
 $('ramload').addEventListener('click', async () => {
   $('ramload').disabled = true;
   try {
-    const t = await ensureOpen();
     log('Loading to RAM (reversible by power cycle)…');
     $('prog').hidden = false;
-    const { version, seconds } = await new P1Loader(t, (m) => log(`  ${m}`))
+    const { version, seconds } = await new P1Loader(link.transport, (m) => log(`  ${m}`))
       .load(image, RUN_FROM_RAM);
     log(`RAM load complete in ${seconds.toFixed(1)}s (chip version ${version}).`, 't-ok');
-    const after = await readVersion(t, 40, 'waiting for the image to boot');
+    const after = await readVersion(link, 40, 'waiting for the image to boot');
     log(after ? `Firmware now reports: ${after}` : 'No ESGv! answer after the RAM load.',
         after ? 't-ok' : 't-err');
+  } catch (e) { log(e.message, 't-err'); }
+  finally { $('prog').hidden = true; refresh(); }
+});
+
+// --- 4. command console -----------------------------------------------------
+
+const RISK_CLASS = { read: 't-dim', write: 't-err', motion: 't-err', reboot: 't-err' };
+
+$('cmdsel').innerHTML = COMMANDS
+  .map((c, i) => `<option value="${i}">${esc(c.key)} — ${esc(c.desc)}</option>`).join('');
+
+const currentCmd = () => COMMANDS[Number($('cmdsel').value)] ?? COMMANDS[0];
+
+function renderCmd() {
+  const c = currentCmd();
+  $('cmddesc').innerHTML =
+    `<span class="${RISK_CLASS[c.risk]}">${esc(RISK_LABEL[c.risk])}</span>` +
+    (c.note ? `<br><span class="t-dim">${esc(c.note)}</span>` : '');
+  $('cmdparams').innerHTML = c.params.map((p) =>
+    `<label>${esc(p.label)}
+       <input id="p_${p.name}" type="text" autocomplete="off" spellcheck="false"
+              class="mono" style="${INPUT_STYLE}width:9rem">
+     </label>`).join('');
+  updateHint();
+}
+
+function pendingCommand() {
+  const raw = $('cmdraw').value.trim();
+  if (raw) return { text: raw, meta: classify(raw), typed: true };
+  const c = currentCmd();
+  const values = {};
+  for (const p of c.params) values[p.name] = $(`p_${p.name}`)?.value ?? '';
+  return { text: buildCommand(c, values), meta: c, typed: false };
+}
+
+function updateHint() {
+  try {
+    const { text, meta, typed } = pendingCommand();
+    const risk = meta?.risk ?? 'unknown';
+    $('cmdhint').textContent = `will send ${text}` +
+      (typed ? (meta ? ` — ${RISK_LABEL[risk] ?? ''}` : ' — unrecognised command') : '');
+    $('cmdhint').className = risk === 'read' ? 't-dim' : 't-err';
+  } catch (e) {
+    $('cmdhint').textContent = e.message;
+    $('cmdhint').className = 't-dim';
+  }
+}
+
+$('cmdsel').addEventListener('change', renderCmd);
+$('cmdraw').addEventListener('input', updateHint);
+$('cmdparams').addEventListener('input', updateHint);
+renderCmd();
+
+// No confirmation gate: this is a console for someone who knows the command set.
+// The risk label beside the button is the warning.
+$('send').addEventListener('click', async () => {
+  let text;
+  try { text = pendingCommand().text; }
+  catch (e) { log(e.message, 't-err'); return; }
+
+  $('send').disabled = true;
+  try {
+    if (!link) throw new Error('Not connected.');
+    log(`> ${text}`);
+    const reply = await link.send(text, { timeoutMs: 5000 });
+    if (!reply.trim()) {
+      log('< (no reply)', 't-err');
+      log('  Some commands answer nothing by design — a real Envision exit and a ' +
+          'malformed command both look like this.', 't-dim');
+    } else log(`< ${JSON.stringify(reply)}`, 't-ok');
   } catch (e) {
     log(e.message, 't-err');
   } finally {
-    $('prog').hidden = true;
-    await transport?.close(); transport = null;
-    refresh();
+    $('send').disabled = false;
   }
 });
 
 $('copy').addEventListener('click', () => navigator.clipboard.writeText(logEl.innerText));
-$('clear').addEventListener('click', () => { logEl.innerHTML = ''; });
+$('clear').addEventListener('click', () => { logEl.innerHTML = ''; logEl.hidden = true; });
 </script>
 </body>
 </html>

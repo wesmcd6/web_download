@@ -103,12 +103,32 @@ td.val { font-family: var(--mono); }
 progress { width: 100%; height: 8px; margin-top: .6rem; }
 details summary { cursor: pointer; color: var(--muted); }
 
-/* The command console is a destination, not a footnote — make it findable. */
-#console > summary {
+/* Each tool is a destination, not a footnote — make the headings findable. */
+.tool > summary {
   color: var(--accent);
   font-weight: 700;
   font-size: 1.05rem;
   letter-spacing: .01em;
+  list-style: none;
 }
-#console > summary:hover { text-decoration: underline; }
-#console[open] > summary { margin-bottom: .3rem; }
+.tool > summary::-webkit-details-marker { display: none; }
+.tool > summary::before {
+  content: '\25B8';            /* ▸ — rotates to ▾ when the section is open */
+  display: inline-block;
+  width: 1.1em;
+  color: var(--muted);
+  transition: transform .12s ease;
+}
+.tool[open] > summary::before { transform: rotate(90deg); }
+.tool > summary:hover { text-decoration: underline; }
+.tool[open] > summary { margin-bottom: .3rem; }
+
+.inp {
+  font: inherit;
+  background: var(--panel-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: .35rem .5rem;
+}
+.mono { font-family: var(--mono); font-size: 13px; }

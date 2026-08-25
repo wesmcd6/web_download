@@ -5,10 +5,17 @@ Serial API. No desktop app, no Python, no install.
 
 Two pages:
 
-| Page | Risk | What it does |
+One page, four collapsible tools, sharing a single open connection — so the port
+is opened once and the mount is reset once, not per tool.
+
+| Section | Risk | What it does |
 |---|---|---|
-| `/` (`index.html`) | **permanent** | Updates the Propeller (P1) mount firmware, then reads the version back to prove it took. Diagnostics live under Advanced. |
-| `identify.html` | reads freely, writes on request | Reports mount model, both firmware versions and **which Wi-Fi module is fitted**, lets every stored setting be changed, and carries a **command console** for any ES command. Works over USB or Wi-Fi. |
+| **Connect** | none | USB or Wi-Fi. Proves the link with `ESGv!` before calling it connected. |
+| **Get and change settings** | reads freely, writes on request | Mount model, both firmware versions, **which Wi-Fi module is fitted**, and every stored setting, editable. Reopening shows the last read. |
+| **Firmware upload** | **permanent** | Updates the Propeller (P1) firmware and reads the version back to prove it took. **USB only.** |
+| **Command console** | up to **permanent** | Any ES command, with the risk named. Sends without confirming. |
+
+`identify.html` and `loader.html` are redirect stubs for old bookmarks.
 
 This is the **Propeller** — the mount's brain. The ESP32/ESP8266 Wi-Fi module is
 a separate processor with its own OTA path, and is out of scope here.
@@ -60,9 +67,9 @@ node test/run-tests.mjs
 ## Layout
 
 ```
-index.html            hub page
-identify.html         read-only identify tool
-loader.html           staged firmware loader
+index.html            the whole app — four collapsible tools
+identify.html         redirect stub (old bookmarks)
+loader.html           redirect stub (old bookmarks)
 src/p1-protocol.js    pure protocol — LFSR, encoder, handshake builder
 src/p1-serial.js      Web Serial transport (reset, tx, buffered rx)
 src/p1-loader.js      loader orchestration + phase 0 listen
