@@ -105,6 +105,11 @@
     <p>Overwrites the mount's firmware. Do this only once phases 1 and 2 are boringly
        repeatable, with a known-good image in hand and a desktop loader standing by
        for recovery. Do not disconnect during the burn.</p>
+    <p class="t-dim">After the burn this reads <code>ESGv!</code> back and reports the
+       version. Run <strong>Phase 0 first</strong> so there is a before-version to
+       compare against — a transfer ACK only proves the bytes arrived, not that the
+       image runs. The definitive test is loading a <em>different</em> version and
+       seeing the number change.</p>
     <div class="row">
       <label>type <code>WRITE</code> to arm
         <input type="text" id="arm" autocomplete="off" style="font:inherit;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:.35rem .5rem;width:7rem">
@@ -125,10 +130,16 @@
 import { SerialTransport, requestPort, isSupported, unsupportedReason } from './src/p1-serial.js';
 import { P1Loader, resetAndListen } from './src/p1-loader.js';
 import { RUN_FROM_RAM, EEPROM_RUN, estimateSeconds, buildPayload } from './src/p1-protocol.js';
+import { ask, parseESGv } from './src/pmc8-identify.js';
 
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
 let port = null, transport = null, image = null;
+
+// The version the mount reported before a load, so a load can be proved by the
+// version CHANGING rather than by the transfer claiming success. A checksum ACK
+// only says the bytes arrived — the image can land and still not run.
+let versionBefore = null;
 
 function log(msg, cls = '') {
   const t = new Date().toISOString().slice(11, 23);
@@ -267,6 +278,7 @@ $('phase0').addEventListener('click', async () => {
     if (r.wifiLine) log(`  splash reports Wi-Fi module: ${r.wifiLine}`);
 
     if (r.versionConfirmed) {
+      versionBefore = r.firmware;   // baseline for proving a later load took
       log(`PHASE 0 OK — ESGv! answered: ${r.firmware}`, 't-ok');
       log(`  Round trip confirmed after ${r.versionAttempts} attempt(s): reset works, ` +
           'the firmware is running and answering commands. Nothing was written.', 't-dim');
@@ -305,6 +317,29 @@ $('phase1').addEventListener('click', async () => {
   }
 });
 
+/**
+ * Ask the freshly-loaded firmware what version it is.
+ *
+ * This is the only real proof a load worked. The boot ROM's ACK means the bytes
+ * arrived and checksummed; it says nothing about whether the image runs. Poll
+ * because the mount has to boot first, which takes 15-20s.
+ */
+async function readVersionAfterLoad(t, seconds = 40) {
+  const deadline = Date.now() + seconds * 1000;
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt++;
+    const left = Math.ceil((deadline - Date.now()) / 1000);
+    log(`  waiting for the new firmware to boot — ESGv! attempt ${attempt} (${left}s left)`);
+    try {
+      const raw = await ask(t, 'ESGv!', { expect: 'ESGv', timeoutMs: 2000 });
+      if (raw.includes('ESGv')) return parseESGv(raw);
+    } catch { /* still booting */ }
+    await new Promise((r) => setTimeout(r, 700));
+  }
+  return null;
+}
+
 async function doLoad(kind, label) {
   try {
     const t = await ensureOpen();
@@ -312,7 +347,27 @@ async function doLoad(kind, label) {
     $('prog').hidden = false; $('prog').removeAttribute('value');
     const loader = new P1Loader(t, (m) => log(`  ${m}`));
     const { version, seconds } = await loader.load(image, kind);
-    log(`${label} COMPLETE in ${seconds.toFixed(1)}s (chip version ${version}).`, 't-ok');
+    log(`${label} transfer COMPLETE in ${seconds.toFixed(1)}s (chip version ${version}).`, 't-ok');
+
+    // Prove it actually runs. The ACK above only proves the bytes arrived.
+    const after = await readVersionAfterLoad(t);
+    if (!after) {
+      log('The transfer was acknowledged but the mount never answered ESGv!. ' +
+          'The image may have landed without running — do NOT treat this as a ' +
+          'successful load.', 't-err');
+    } else if (versionBefore && after === versionBefore) {
+      log(`Firmware still reports ${after} — unchanged from before the load.`, 't-err');
+      log('  If you loaded a different version, this did NOT take effect. If you ' +
+          'reloaded the same version, this is expected and proves nothing.', 't-dim');
+    } else if (versionBefore) {
+      log(`VERIFIED: firmware changed  ${versionBefore}  →  ${after}`, 't-ok');
+      versionBefore = after;
+    } else {
+      log(`Firmware now reports: ${after}`, 't-ok');
+      log('  No before-version was captured, so this shows what is running but ' +
+          'does not prove it changed. Run Phase 0 first next time.', 't-dim');
+      versionBefore = after;
+    }
   } catch (e) {
     log(`${label} FAILED: ${e.message}`, 't-err');
   } finally {

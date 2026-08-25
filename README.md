@@ -24,10 +24,14 @@ The DTR reset works from Web Serial, the LFSR seed and taps are correct, and the
 handshake completes in 178 ms returning Propeller version 1. Full capture in
 [docs/HARDWARE-LOG.md](docs/HARDWARE-LOG.md).
 
-**Phases 2 and 3 are unrun.** The remaining risk is whether Chrome streams a
-single ~81 KB `write()` contiguously enough for the boot ROM — see
-[docs/PROTOCOL.md](docs/PROTOCOL.md#the-contiguous-write-risk). Phase 2 is
-reversible by power cycle, so it is safe to try next.
+**Phases 2 and 3: provisional pass.** A RAM→EEPROM load reported success and
+looked right, but a checksum ACK only proves the bytes arrived, not that the
+image runs. The loader now reads `ESGv!` back after any load and compares it
+against the version from Phase 0. **The definitive test is loading a different
+version and seeing the number change** — not yet done.
+
+Settings read and write over USB are confirmed on hardware, and the Wi-Fi
+transport reads correctly.
 
 ## Run it
 
