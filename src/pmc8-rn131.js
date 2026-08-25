@@ -80,15 +80,45 @@ export function restoreCommandList() {
 export const RESTORE_STEP_COUNT = restoreCommandList().length + 1;
 
 /**
- * Send one line through passthrough and collect whatever comes back.
- * The RN-131 answers `AOK` on success and `ERR` on a bad command.
+ * Send one line through passthrough and read the module's answer.
+ *
+ * In command mode the RN-131 echoes the command, then answers `AOK` or
+ * `ERR: …`, then prints its prompt `<4.41>`. So there is a definite
+ * end-of-response to wait for — poll until one of those appears rather than
+ * sleeping a fixed time and hoping.
+ *
+ * Two things an earlier version got wrong, both of which made every command
+ * look silent:
+ *   - it flushed the buffer BEFORE each command, discarding the previous
+ *     command's late reply, so a slow answer was attributed to the next
+ *     command or lost entirely;
+ *   - it read for a fixed 200 ms, which is shorter than the module often
+ *     takes, so most replies were simply missed.
  */
-async function line(transport, text, waitMs = 400) {
-  transport.flush();
+async function line(transport, text, timeoutMs = 2000) {
   await transport.tx(ENC.encode(`${text}@`));
-  await sleep(waitMs);
-  const d = await transport.rxTimeout(512, 200);
-  return DEC.decode(d).replace(/[\r\n]+/g, ' ').trim();
+
+  const deadline = Date.now() + timeoutMs;
+  let acc = '';
+  let lastByte = Date.now();
+  while (Date.now() < deadline) {
+    const d = await transport.rxTimeout(512, Math.max(50, Math.min(150, deadline - Date.now())));
+    if (d.length) { acc += DEC.decode(d); lastByte = Date.now(); }
+    // AOK / ERR / the <x.xx> prompt all mean the module is done with this line.
+    if (/\bAOK\b|\bERR\b|<\d+\.\d+>/i.test(acc) && Date.now() - lastByte > 60) break;
+    if (acc && Date.now() - lastByte > 400) break;          // went quiet
+  }
+
+  const clean = acc.replace(/[\r\n]+/g, ' ').trim();
+  // Strip our own echo so the log shows the ANSWER, not the question again.
+  const reply = clean.startsWith(text) ? clean.slice(text.length).trim() : clean;
+  return {
+    raw: clean,
+    reply,
+    ok: /\bAOK\b/i.test(clean),
+    err: /\bERR\b/i.test(clean),
+    silent: clean === '',
+  };
 }
 
 /**
@@ -111,35 +141,62 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
   if (entered) log(`  ${entered}`);
 
   // $$$ is the RN-131's Hayes-style escape. It takes no terminator, and the
-  // module wants a quiet period either side of it.
+  // module wants a quiet period either side of it. It answers "CMD".
   await sleep(300);
   transport.flush();
   await transport.tx(ENC.encode('$$$'));
-  await sleep(600);
-  const cmdMode = DEC.decode(await transport.rxTimeout(256, 400)).trim();
-  log(cmdMode ? `  module says: ${cmdMode}` : '  module said nothing to $$$');
+  let cmdMode = '';
+  const escDeadline = Date.now() + 2000;
+  while (Date.now() < escDeadline) {
+    const d = await transport.rxTimeout(256, 200);
+    if (d.length) cmdMode += DEC.decode(d);
+    if (/CMD/i.test(cmdMode)) break;
+  }
+  cmdMode = cmdMode.replace(/[\r\n]+/g, ' ').trim();
+  if (/CMD/i.test(cmdMode)) {
+    log('  module is in command mode (CMD).', 't-ok');
+  } else {
+    // Not fatal — carry on and let the per-command replies tell the story —
+    // but say so, because every command failing afterwards would otherwise be
+    // a mystery rather than an obvious consequence.
+    log(`  no CMD from $$$${cmdMode ? ` (got: ${cmdMode})` : ''}. ` +
+        'The module may not be in command mode.', 't-warn');
+  }
 
+  const silent = [];
   try {
     for (const group of RN131_RESTORE_GROUPS) {
       log(`${group.title}…`);
       for (const cmd of group.cmds) {
-        const reply = await line(transport, cmd);
+        const r = await line(transport, cmd);
         bump(cmd);
-        if (/ERR/i.test(reply)) {
-          failures.push({ cmd, reply });
-          log(`  ${cmd} → ${reply}`, 't-err');
+        if (r.err) {
+          failures.push({ cmd, reply: r.reply });
+          log(`  ${cmd} → ${r.reply}`, 't-err');
+        } else if (r.silent) {
+          silent.push(cmd);
+          log(`  ${cmd} → no reply`, 't-warn');
         } else {
-          log(`  ${cmd}${reply ? ` → ${reply}` : ''}`);
+          log(`  ${cmd} → ${r.reply || 'OK'}`, 't-ok');
         }
       }
-      const saved = await line(transport, 'save');
+
+      const s = await line(transport, 'save');
       bump('save');
-      log(`  save${saved ? ` → ${saved}` : ''}`);
+      if (s.err) {
+        failures.push({ cmd: `save (${group.title})`, reply: s.reply });
+        log(`  ${group.title} NOT saved → ${s.reply}`, 't-err');
+      } else if (s.silent) {
+        silent.push(`save (${group.title})`);
+        log(`  ${group.title} — save sent, no confirmation`, 't-warn');
+      } else {
+        log(`  ${group.title} saved → ${s.reply || 'OK'}`, 't-ok');
+      }
       await sleep(100);
     }
 
     log('Rebooting the module…');
-    await line(transport, 'reboot', 200);
+    await line(transport, 'reboot', 800);
     bump('reboot');
   } finally {
     // Always leave passthrough, whatever happened above — otherwise the mount
@@ -156,5 +213,5 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
     }
   }
 
-  return { ok: failures.length === 0, steps: step, failures };
+  return { ok: failures.length === 0, steps: step, failures, silent };
 }
