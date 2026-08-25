@@ -144,8 +144,17 @@ import { RUN_FROM_RAM, EEPROM_RUN, estimateSeconds, buildPayload } from './src/p
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
 
-// One connection for the whole page. Every tool shares it, so nothing re-prompts
-// for a port and the mount is reset once rather than per tool.
+/**
+ * Connections are cached PER TRANSPORT, not swapped.
+ *
+ * Opening the serial port resets the mount and costs 15-20s to come back, so
+ * once it is open it stays open — switching to Wi-Fi and back must not pay that
+ * again. `link` is whichever one is currently in use; `serialLink` and
+ * `httpLink` are held independently and only released by Disconnect or by the
+ * page going away.
+ */
+let serialLink = null;
+let httpLink = null;
 let link = null;
 let image = null;
 let imageName = '';   // the filename carries the version we are meant to end up at
@@ -208,13 +217,17 @@ function row(k, v, extra) {
     extra ? `<br><span class="t-dim">${esc(extra)}</span>` : ''}</td></tr>`;
 }
 
-/** Serial-only tools need a SerialLink; Wi-Fi cannot carry them. */
-const onSerial = () => !!link && link.kind === 'serial';
+/**
+ * Firmware upload needs the serial port, but not necessarily the ACTIVE link —
+ * the port stays open across a switch to Wi-Fi, so it is still usable.
+ */
+const hasSerial = () => !!serialLink;
 
 /** Enable/disable every tool according to what is connected and loaded. */
 function refresh() {
-  $('disconnect').disabled = !link;
-  $('conn').textContent = link ? `connected — ${link.label}` : 'not connected';
+  $('disconnect').disabled = !serialLink && !httpLink;
+  const held = (serialLink && link !== serialLink) ? ' · serial port still open' : '';
+  $('conn').textContent = link ? `connected — ${link.label}${held}` : 'not connected';
   $('conn').className = link ? 't-ok' : 't-dim';
 
   $('read').disabled = !link;
@@ -222,7 +235,7 @@ function refresh() {
 
   $('send').disabled = !link;
 
-  const fwBlock = !onSerial() ? (link ? 'Firmware upload needs the USB cable.' : 'Connect over USB first.')
+  const fwBlock = !hasSerial() ? 'Connect over USB first — firmware upload needs the cable.'
                 : !image ? 'Choose a firmware image.'
                 : null;
   // Leave the button alone once it is showing the FIRMWARE UPDATED result —
@@ -306,26 +319,26 @@ $('go').addEventListener('click', async () => {
   $('go').disabled = true;
   $('go').textContent = 'Connecting…';
   busy('connstatus', 'Connecting…');
+  const how = $('how').value;
+  let fresh = false;
   try {
-    // Drop a cached link that no longer matches the form. Building an HttpLink
-    // never touches the network, so a failed Wi-Fi attempt still leaves one.
-    const how = $('how').value;
-    const wantHost = how === 'http' ? normalizeHost($('mounthost').value) : null;
-    if (link && (link.kind !== how || (how === 'http' && link.host !== wantHost))) {
-      log('Connection settings changed — dropping the old one.', 't-dim');
-      await link.close();
-      link = null;
-    }
-    if (link) {
-      log(`Already connected over ${link.label}.`);
-      settled('connstatus', `Already connected over ${link.label}.`, true);
-      return;
-    }
-
     if (how === 'http') {
-      link = new HttpLink($('mounthost').value);
-      log(`Connecting over ${link.label}…`);
+      const wantHost = normalizeHost($('mounthost').value);
+      // A different address means a different link; the same one is reusable
+      // because HttpLink holds no connection, only a target.
+      if (httpLink && httpLink.host !== wantHost) {
+        await httpLink.close();
+        httpLink = null;
+      }
+      if (!httpLink) { httpLink = new HttpLink($('mounthost').value); fresh = true; }
+      link = httpLink;
+      log(`Using ${link.label}…`);
       busy('connstatus', `Contacting ${link.host}…`);
+    } else if (serialLink) {
+      // The whole point of holding it: no reopen, so no reset, so no 20s wait.
+      link = serialLink;
+      log('Re-using the serial port that is already open — no reset.');
+      busy('connstatus', 'Checking the mount is still answering…');
     } else {
       busy('connstatus', 'Waiting for you to pick a port…');
       const port = await requestPort();
@@ -337,18 +350,28 @@ $('go').addEventListener('click', async () => {
           `Could not open the serial port: ${e.message}. Windows will not share a ` +
           'COM port — close UFCT, the PMC8 Dashboard or any other tool holding it.');
       }
-      link = new SerialLink(t);
+      serialLink = new SerialLink(t);
+      link = serialLink;
+      fresh = true;
       log('Port open. The mount is resetting; the next 15-20s of silence is expected.', 't-dim');
       busy('connstatus', 'Port open — the mount is resetting, this takes 15-20s…');
     }
 
-    // Prove the link before calling it connected.
-    const v = await readVersion(link, 40, 'Waiting for the mount', 'connstatus');
+    // Prove the link before calling it connected. On a reused serial port this
+    // answers immediately, which is the confirmation that holding it worked.
+    const v = await readVersion(link, fresh ? 40 : 10, 'Waiting for the mount', 'connstatus');
     if (!v) throw new Error('The mount never answered ESGv!.');
     log(`Connected. Mount firmware: ${v}`, 't-ok');
-    settled('connstatus', `Connected. Mount firmware: ${v}`, true);
+    settled('connstatus', `Connected over ${link.label}. Mount firmware: ${v}`, true);
   } catch (e) {
-    if (link) { try { await link.close(); } catch { /* already gone */ } link = null; }
+    // Only discard what this attempt created. A working serial port must
+    // survive a failed Wi-Fi attempt.
+    if (fresh && link) {
+      try { await link.close(); } catch { /* already gone */ }
+      if (link === serialLink) serialLink = null;
+      if (link === httpLink) httpLink = null;
+    }
+    link = null;
     log(e.message, 't-err');
     settled('connstatus', e.message, false);
   } finally {
@@ -359,11 +382,22 @@ $('go').addEventListener('click', async () => {
 });
 
 $('disconnect').addEventListener('click', async () => {
-  if (link) { await link.close(); link = null; }
+  // Explicit disconnect releases everything, including the held serial port.
+  if (serialLink) { try { await serialLink.close(); } catch { /* already gone */ } }
+  if (httpLink) { try { await httpLink.close(); } catch { /* already gone */ } }
+  serialLink = null; httpLink = null; link = null;
   lastInfo = null;
   $('result').hidden = true;
-  log('Disconnected.', 't-dim');
+  clearStatus('connstatus');
+  log('Disconnected. Serial port released.', 't-dim');
   refresh();
+});
+
+// Give the serial port back when the page goes away. Chrome would release it on
+// tab close anyway, but a reload or a navigation should not leave the port held
+// against the next attempt. Fire and forget — unload cannot await.
+window.addEventListener('pagehide', () => {
+  try { serialLink?.transport?.port?.close?.(); } catch { /* nothing to do here */ }
 });
 
 /** Poll ESGv! until the firmware answers. `statusId` gets a live countdown. */
@@ -727,10 +761,13 @@ $('file').addEventListener('change', async (ev) => {
 });
 
 async function runUpdate() {
-  const t = link.transport;
+  // Always drive the update over the serial port, even if Wi-Fi is the link
+  // currently in use — the boot ROM needs the DTR reset and a raw byte stream.
+  const fw = serialLink;
+  const t = fw.transport;
 
   log('Reading the current firmware version…');
-  const before = await readVersion(link, 40, 'Reading the current version', 'upstatus');
+  const before = await readVersion(fw, 40, 'Reading the current version', 'upstatus');
   if (before) log(`Currently running: ${before}`, 't-ok');
   else log('No ESGv! answer. Continuing, but there will be no before-version to ' +
            'compare against.', 't-warn');
@@ -751,7 +788,7 @@ async function runUpdate() {
   // silently rebooting.
   busy('upstatus', 'Transfer done — waiting for the mount to reboot…');
 
-  const after = await readVersion(link, 40, 'Waiting for the new firmware to boot', 'upstatus');
+  const after = await readVersion(fw, 40, 'Waiting for the new firmware to boot', 'upstatus');
   $('prog').hidden = true;
 
   // Judge the update by what the mount is RUNNING versus what we loaded — not
@@ -789,7 +826,7 @@ async function runUpdate() {
 }
 
 $('upload').addEventListener('click', () => {
-  if (!image || !onSerial()) return;
+  if (!image || !hasSerial()) return;
 
   // Render into a container directly under the button, and CLEAR it first.
   // Appending to the log put the prompt below the command console, far from
