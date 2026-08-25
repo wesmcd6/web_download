@@ -51,6 +51,10 @@ const logEl = $('log');
 // it, so saving never re-prompts or resets the mount.
 let transport = null;
 
+// Everything show() needs besides the config itself, so a successful save can
+// re-render with the mount's new values without re-reading the module.
+const view = { baud: 115200, envision: null, esp: null };
+
 function log(msg, cls = '') {
   logEl.hidden = false;
   const line = document.createElement('div');
@@ -109,6 +113,7 @@ function readOnlyRows(cfg) {
 function show(info, baud, envision, esp) {
   const el = $('result');
   el.hidden = false;
+  view.baud = baud; view.envision = envision; view.esp = esp;
 
   const connNote = baud && baud !== info.baud
     ? row('Connected at', `${baud} baud`,
@@ -243,11 +248,13 @@ function wireEditor(cfg) {
   refresh();
 
   const slog = $('savelog');
+  // Look the element up per call: a successful save re-renders the card, so the
+  // node captured at wire time is detached by the time we report the result.
   const put = (m, cls) => {
     const d = document.createElement('div');
     if (cls) d.className = cls;
     d.textContent = m;
-    slog.appendChild(d);
+    $('savelog').appendChild(d);
   };
 
   // Confirm inline, not with window.confirm(). A native modal freezes the whole
@@ -296,6 +303,12 @@ function wireEditor(cfg) {
       } else {
         // Verify against the mount's echo rather than trusting the command.
         const after = changedFields(res.cfg, values);
+
+        // Re-render from the mount's echoed config. This resets the form's
+        // baseline, so the "changes pending" warning clears itself instead of
+        // lingering until the next manual read.
+        show({ firmware: cfg.firmware, ...res.cfg }, view.baud, view.envision, view.esp);
+
         if (after.length) {
           put('The mount accepted the command but some values did not stick:', 't-err');
           for (const d of after) {
@@ -306,6 +319,7 @@ function wireEditor(cfg) {
           put('Saved. The mount echoed back every value as requested.', 't-ok');
         }
         put(`New raw ESGi: ${res.cfg.raw}`, 't-dim');
+        return;   // the re-render already re-enabled Save
       }
     } catch (e) {
       put(e.message, 't-err');
