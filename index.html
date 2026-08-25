@@ -237,6 +237,17 @@ let imageName = '';   // the filename carries the version we are meant to end up
 let fwDone = false;
 let rnDone = false;
 
+/**
+ * An HTTPS page cannot call a plain-HTTP mount: browsers block it as mixed
+ * content and fetch() reports it as an opaque TypeError. Say so before the
+ * attempt rather than after.
+ *
+ * This is the standing trade-off of hosting the page. Web Serial REQUIRES a
+ * secure context, and the Wi-Fi transport requires the page NOT be one — no
+ * single origin satisfies both.
+ */
+const HTTPS_BLOCKS_WIFI = window.location.protocol === 'https:';
+
 // The last successful read, so reopening the settings section shows what we
 // already know instead of a blank panel.
 let lastInfo = null;
@@ -373,26 +384,48 @@ $('s-firmware').addEventListener('toggle', () => {
   if ($('s-firmware').open) clearFirmwareResult();
 });
 
-if (!serialAvailable()) {
+// The two transports want opposite things from the page's own origin: Web
+// Serial requires HTTPS, and reaching a plain-HTTP mount requires that the page
+// NOT be HTTPS. So a hosted copy can do USB, and a locally served copy can do
+// both — which is worth explaining rather than leaving as a puzzle.
+if (!serialAvailable() || HTTPS_BLOCKS_WIFI) {
   const el = $('unsupported');
   el.hidden = false;
-  el.textContent =
-    'This browser cannot use a USB cable — Web Serial is desktop Chrome, Edge and ' +
-    'Opera only. Wi-Fi works fine: pick it below and enter the mount\'s address. ' +
-    'Firmware upload needs USB and will stay unavailable here. ' +
-    (window.location.protocol === 'https:'
-      ? 'This page is on HTTPS, which browsers block from calling a plain-HTTP ' +
-        'mount — reload it over http:// instead.'
-      : '');
-  $('how').value = 'http';
-  $('how').querySelector('option[value=serial]').disabled = true;
+  el.className = 'notice';
+
+  if (!serialAvailable() && HTTPS_BLOCKS_WIFI) {
+    el.innerHTML = '<strong>This browser cannot reach the mount from this page.</strong><br>' +
+      'It has no Web Serial (that is desktop Chrome, Edge and Opera only), and this ' +
+      'page is served over <code>https://</code>, which browsers forbid from calling ' +
+      'a plain-HTTP mount. Run the page over <code>http://</code> from a machine on ' +
+      'your network and Wi-Fi will work here.';
+  } else if (!serialAvailable()) {
+    el.innerHTML = '<strong>No USB on this browser.</strong> Web Serial is desktop ' +
+      'Chrome, Edge and Opera only, so firmware upload and the module-version read ' +
+      'are unavailable. Wi-Fi works: enter the mount\'s address below.';
+    $('how').value = 'http';
+    $('how').querySelector('option[value=serial]').disabled = true;
+  } else {
+    el.innerHTML = '<strong>Wi-Fi is unavailable on this hosted copy.</strong> ' +
+      'The page is served over <code>https://</code> and browsers block an HTTPS ' +
+      'page from calling a plain-HTTP mount. USB works normally — in fact Web ' +
+      'Serial requires HTTPS, so the two cannot both be satisfied by one origin. ' +
+      'For Wi-Fi, serve the page over <code>http://</code> on your own network.';
+  }
 }
 
 function refreshHow() {
   const wifi = $('how').value === 'http';
-  $('mounthost').disabled = !wifi;
-  $('mounthost').style.opacity = wifi ? '1' : '0.4';
-  $('wifinote').textContent = wifi ? '' : '(Wi-Fi only)';
+  $('mounthost').disabled = !wifi || HTTPS_BLOCKS_WIFI;
+  $('mounthost').style.opacity = wifi && !HTTPS_BLOCKS_WIFI ? '1' : '0.4';
+  $('wifinote').textContent = !wifi ? '(Wi-Fi only)'
+    : HTTPS_BLOCKS_WIFI ? 'unavailable on https:// — see below'
+    : '';
+}
+
+if (HTTPS_BLOCKS_WIFI) {
+  $('how').querySelector('option[value=http]').disabled = true;
+  $('how').value = serialAvailable() ? 'serial' : 'http';
 }
 $('how').addEventListener('change', refreshHow);
 refreshHow();
