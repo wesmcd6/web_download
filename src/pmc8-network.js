@@ -142,21 +142,33 @@ export async function readWifiAddress(link, module, log = () => {}) {
     await enterPassthrough(transport);
 
     if (module === 'RN131') {
-      if (!await ensureCommandMode(transport, log)) {
-        return { ip: null, raw: '', error: 'Could not put the RN-131 into command mode.' };
-      }
-      await clearLine(transport);
-      const r = await line(transport, 'get ip a', 3000);
-      // "?-" means the module lost the command's first character. The VB tool
-      // retries here rather than reporting a failure, and so do we.
-      let raw = r.raw;
-      if (/\?-/.test(raw)) {
-        log('  module garbled the command (?-) — retrying…', 't-warn');
+      let inCmd = false;
+      try {
+        if (!await ensureCommandMode(transport, log)) {
+          return { ip: null, raw: '', error: 'Could not put the RN-131 into command mode.' };
+        }
+        inCmd = true;
         await clearLine(transport);
-        raw = (await line(transport, 'get ip a', 3000)).raw;
+        const r = await line(transport, 'get ip a', 3000);
+        // "?-" means the module lost the command's first character. The VB tool
+        // retries here rather than reporting a failure, and so do we.
+        let raw = r.raw;
+        if (/\?-/.test(raw)) {
+          log('  module garbled the command (?-) — retrying…', 't-warn');
+          await clearLine(transport);
+          raw = (await line(transport, 'get ip a', 3000)).raw;
+        }
+        return { ip: extractIp(raw), raw };
+      } finally {
+        // Must leave command mode, not just passthrough — see the join path.
+        if (inCmd) {
+          const bye = await line(transport, 'exit', 1500);
+          log(/EXIT/i.test(bye.raw)
+            ? '  module back in data mode (EXIT).'
+            : `  sent exit${bye.raw ? ` — module said: ${bye.raw}` : ', no EXIT confirmation'}.`,
+            /EXIT/i.test(bye.raw) ? 't-ok' : 't-warn');
+        }
       }
-      await line(transport, 'exit', 1200);          // back to data mode
-      return { ip: extractIp(raw), raw };
     }
 
     // ESP: probe for a live AT interface first — it also clears the echo.
@@ -248,38 +260,61 @@ export async function configureHomeNetwork(link, module, ssid, password, log = (
             't-dim');
       }
 
-      if (!await ensureCommandMode(transport, log)) {
-        return { ok: false, error: 'Could not put the RN-131 into command mode.' };
-      }
-      await clearLine(transport);
+      // Track it so the exit below only fires when we are actually in command
+      // mode, and ALWAYS fires when we are.
+      let inCmd = false;
+      try {
+        if (!await ensureCommandMode(transport, log)) {
+          return { ok: false, error: 'Could not put the RN-131 into command mode.' };
+        }
+        inCmd = true;
+        await clearLine(transport);
 
-      const seq = rn131JoinSequence(ssid, password);
-      for (let i = 0; i < seq.length; i++) {
-        const r = await line(transport, seq[i], 2500);
-        onStep(i + 1, seq.length + 1, seq[i]);
-        // Never echo the passphrase back into the log.
-        const shown = seq[i].startsWith('set wlan pass') ? 'set wlan pass ********' : seq[i];
-        log(`  ${shown} → ${r.reply || (r.silent ? 'no reply' : 'sent')}`,
-            r.err ? 't-err' : 't-ok');
-      }
+        const seq = rn131JoinSequence(ssid, password);
+        for (let i = 0; i < seq.length; i++) {
+          const r = await line(transport, seq[i], 2500);
+          onStep(i + 1, seq.length + 2, seq[i]);
+          // Never echo the passphrase back into the log.
+          const shown = seq[i].startsWith('set wlan pass') ? 'set wlan pass ********' : seq[i];
+          log(`  ${shown} → ${r.reply || (r.silent ? 'no reply' : 'sent')}`,
+              r.err ? 't-err' : 't-ok');
+        }
 
-      log('Rebooting the module and waiting for it to join…');
-      await line(transport, 'reboot', 1500);
-      onStep(seq.length + 1, seq.length + 1, 'reboot');
-      await sleep(8000);
+        log('Rebooting the module and waiting for it to join…');
+        await line(transport, 'reboot', 1500);
+        inCmd = false;                    // the reboot drops command mode with it
 
-      // The reboot drops command mode but NOT the Propeller's passthrough, so
-      // only the escape needs re-sending.
-      if (!await ensureCommandMode(transport, log)) {
-        return { ok: true, ip: null, error:
-          'Configured, but could not re-enter command mode to read the address — ' +
-          'the module may still be joining. Use Get Wi-Fi address in a moment.' };
+        // Count the wait down rather than sitting on a stale status line for
+        // eight seconds — a silent spinner reads as a hang.
+        for (let s = 8; s > 0; s--) {
+          onStep(seq.length + 1, seq.length + 2, `rebooting and joining — ${s}s`);
+          await sleep(1000);
+        }
+
+        // The reboot drops command mode but NOT the Propeller's passthrough, so
+        // only the escape needs re-sending.
+        onStep(seq.length + 2, seq.length + 2, 'reading the assigned address');
+        if (!await ensureCommandMode(transport, log)) {
+          return { ok: true, ip: null, error:
+            'Configured, but could not re-enter command mode to read the address — ' +
+            'the module may still be joining. Use Get Wi-Fi address in a moment.' };
+        }
+        inCmd = true;
+        await clearLine(transport);
+        const got = await line(transport, 'get ip a', 3000);
+        return { ok: true, ip: extractIp(got.raw), raw: got.raw };
+      } finally {
+        // '###' below closes the Propeller's passthrough only. A module left in
+        // command mode has NO DATA LINK until it reboots, so this must run
+        // whatever happened above.
+        if (inCmd) {
+          const bye = await line(transport, 'exit', 1500);
+          log(/EXIT/i.test(bye.raw)
+            ? '  module back in data mode (EXIT).'
+            : `  sent exit${bye.raw ? ` — module said: ${bye.raw}` : ', no EXIT confirmation'}.`,
+            /EXIT/i.test(bye.raw) ? 't-ok' : 't-warn');
+        }
       }
-      await clearLine(transport);
-      const got = await line(transport, 'get ip a', 3000);
-      await line(transport, 'exit', 1200);
-      const ip = extractIp(got.raw);
-      return { ok: true, ip, raw: got.raw };
     }
 
     // ── ESP32 / ESP8266 ───────────────────────────────────────────────
