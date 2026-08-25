@@ -8,7 +8,7 @@ Two pages:
 | Page | Risk | What it does |
 |---|---|---|
 | `/` (`index.html`) | **permanent** | Updates the Propeller (P1) mount firmware, then reads the version back to prove it took. Diagnostics live under Advanced. |
-| `identify.html` | reads freely, writes on request | Reports mount model, both firmware versions and **which Wi-Fi module is fitted**, and lets every stored setting be changed. Works over USB or Wi-Fi. |
+| `identify.html` | reads freely, writes on request | Reports mount model, both firmware versions and **which Wi-Fi module is fitted**, lets every stored setting be changed, and carries a **command console** for any ES command. Works over USB or Wi-Fi. |
 
 This is the **Propeller** — the mount's brain. The ESP32/ESP8266 Wi-Fi module is
 a separate processor with its own OTA path, and is out of scope here.
@@ -66,7 +66,10 @@ loader.html           staged firmware loader
 src/p1-protocol.js    pure protocol — LFSR, encoder, handshake builder
 src/p1-serial.js      Web Serial transport (reset, tx, buffered rx)
 src/p1-loader.js      loader orchestration + phase 0 listen
-src/pmc8-identify.js  ESGv!/ESGi! commands and parsers
+src/pmc8-identify.js  ESGv!/ESGi!/ESGe! commands and parsers
+src/pmc8-settings.js  ESSi! builder + write/verify
+src/pmc8-commands.js  the ES command table, ported from the PMC8 Dashboard
+src/mount-link.js     one send(command) interface over USB or Wi-Fi
 test/                 golden vectors + node test runner
 docs/DESIGN.md        why, architecture, what is verified vs not
 docs/PROTOCOL.md      the wire, in detail — read before touching the loader

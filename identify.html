@@ -49,6 +49,36 @@
 
   <div id="unsupported" class="notice bad" hidden></div>
   <div id="result" hidden></div>
+
+  <details class="card" id="console">
+    <summary>Command console</summary>
+    <p class="t-dim" style="margin:.8rem 0 0">Send any ES command and see the raw
+       reply. Connect first. Replies appear in the log below.</p>
+
+    <div class="row" style="margin-top:.9rem">
+      <label style="flex:1 1 100%">command
+        <select id="cmdsel" style="font:inherit;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:.35rem .5rem;width:100%;max-width:34rem"></select>
+      </label>
+    </div>
+    <div id="cmddesc" class="t-dim" style="margin:.5rem 0"></div>
+    <div id="cmdparams" class="row"></div>
+
+    <div class="row" style="margin-top:.9rem">
+      <label style="flex:1 1 100%">or type it yourself
+        <input id="cmdraw" type="text" autocomplete="off" spellcheck="false"
+               placeholder="ESGv!"
+               style="font-family:var(--mono);font-size:13px;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:.4rem .5rem;width:100%;max-width:34rem">
+      </label>
+    </div>
+    <p class="t-dim" style="margin:.4rem 0 0">Typing here overrides the selection above.</p>
+
+    <div class="row" style="margin-top:.9rem">
+      <button id="send" class="primary">Send</button>
+      <span id="cmdhint" class="t-dim"></span>
+    </div>
+    <div id="cmdconfirm" style="margin-top:.6rem"></div>
+  </details>
+
   <div id="log" hidden></div>
 </main>
 
@@ -63,6 +93,7 @@ import {
   EDITABLE_FIELDS, READ_ONLY_FIELDS, currentValues, changedFields,
   buildESSi, displayValue, writeSettings,
 } from './src/pmc8-settings.js';
+import { COMMANDS, RISK_LABEL, buildCommand, classify } from './src/pmc8-commands.js';
 
 const $ = (id) => document.getElementById(id);
 const logEl = $('log');
@@ -442,6 +473,110 @@ function wireEditor(cfg, envision) {
     }
   }
 }
+
+// --- command console --------------------------------------------------------
+
+const RISK_CLASS = { read: 't-dim', write: 't-err', motion: 't-err', reboot: 't-err' };
+
+$('cmdsel').innerHTML = COMMANDS
+  .map((c, i) => `<option value="${i}">${esc(c.key)} — ${esc(c.desc)}</option>`).join('');
+
+function currentCmd() {
+  return COMMANDS[Number($('cmdsel').value)] ?? COMMANDS[0];
+}
+
+function renderCmd() {
+  const c = currentCmd();
+  $('cmddesc').innerHTML =
+    `<span class="${RISK_CLASS[c.risk]}">${esc(RISK_LABEL[c.risk])}</span>` +
+    (c.note ? `<br><span class="t-dim">${esc(c.note)}</span>` : '');
+  $('cmdparams').innerHTML = c.params.map((p) =>
+    `<label>${esc(p.label)}
+       <input id="p_${p.name}" type="text" autocomplete="off" spellcheck="false"
+              style="font-family:var(--mono);background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:.3rem .45rem;width:9rem">
+     </label>`).join('');
+  updateHint();
+}
+
+/** What will actually go on the wire: the raw box wins when it has content. */
+function pendingCommand() {
+  const raw = $('cmdraw').value.trim();
+  if (raw) return { text: raw, meta: classify(raw), typed: true };
+  const c = currentCmd();
+  const values = {};
+  for (const p of c.params) values[p.name] = $(`p_${p.name}`)?.value ?? '';
+  return { text: buildCommand(c, values), meta: c, typed: false };
+}
+
+function updateHint() {
+  try {
+    const { text, meta, typed } = pendingCommand();
+    const risk = meta?.risk ?? 'unknown';
+    $('cmdhint').textContent = typed
+      ? `will send ${text}` + (meta ? ` — ${RISK_LABEL[risk] ?? ''}` : ' — unrecognised command')
+      : `will send ${text}`;
+    $('cmdhint').className = risk === 'read' ? 't-dim' : 't-err';
+  } catch (e) {
+    $('cmdhint').textContent = e.message;
+    $('cmdhint').className = 't-dim';
+  }
+}
+
+$('cmdsel').addEventListener('change', renderCmd);
+$('cmdraw').addEventListener('input', updateHint);
+$('cmdparams').addEventListener('input', updateHint);
+renderCmd();
+
+async function sendCommand(text) {
+  $('send').disabled = true;
+  try {
+    if (!link) throw new Error('Not connected — connect first.');
+    log(`> ${text}`);
+    const reply = await link.send(text, { timeoutMs: 5000 });
+    if (!reply.trim()) {
+      log('< (no reply)', 't-err');
+      log('  Some commands answer nothing by design — a real Envision exit and a ' +
+          'malformed command both look like this.', 't-dim');
+    } else {
+      log(`< ${JSON.stringify(reply)}`, 't-ok');
+    }
+  } catch (e) {
+    log(e.message, 't-err');
+  } finally {
+    $('send').disabled = false;
+  }
+}
+
+$('send').addEventListener('click', () => {
+  let pending;
+  try {
+    pending = pendingCommand();
+  } catch (e) {
+    log(e.message, 't-err');
+    return;
+  }
+  const { text, meta } = pending;
+  const risk = meta?.risk ?? 'unknown';
+  $('cmdconfirm').innerHTML = '';
+
+  if (risk === 'read') { sendCommand(text); return; }
+
+  // Anything that is not a pure read gets confirmed inline first.
+  const panel = document.createElement('div');
+  panel.className = 'notice bad';
+  panel.innerHTML = `
+    <div><strong>Send <code>${esc(text)}</code>?</strong></div>
+    <p style="margin:.5rem 0">${esc(meta
+      ? `${RISK_LABEL[risk]}. ${meta.note ?? ''}`
+      : 'This command is not in the known list, so what it does cannot be checked.')}</p>
+    <div class="row">
+      <button id="cmdyes" class="danger">Send it</button>
+      <button id="cmdno">Cancel</button>
+    </div>`;
+  $('cmdconfirm').appendChild(panel);
+  $('cmdno').addEventListener('click', () => { panel.remove(); });
+  $('cmdyes').addEventListener('click', () => { panel.remove(); sendCommand(text); });
+});
 
 $('go').addEventListener('click', async () => {
   const goLabel = $('go').textContent;
