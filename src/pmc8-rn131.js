@@ -148,6 +148,40 @@ async function line(transport, text, timeoutMs = 2000) {
   };
 }
 
+/**
+ * Are we already in command mode?
+ *
+ * Send a bare CR. In command mode the module answers with its prompt,
+ * `<4.41>`. In data mode a lone CR is just forwarded to the socket and nothing
+ * comes back.
+ *
+ * This has to be asked BEFORE sending `$$$`, because `$$$` only escapes from
+ * DATA mode. Sent to a module that is already in command mode it is not an
+ * escape at all — it is three '$' characters that sit in the line buffer and
+ * corrupt the next real command, which is exactly the `ERR: ?-Cmd` seen on the
+ * first line of a restore.
+ */
+async function inCommandMode(transport) {
+  transport.flush();
+  await transport.tx(ENC.encode('@'));
+  const deadline = Date.now() + 900;
+  let acc = '';
+  while (Date.now() < deadline) {
+    const d = await transport.rxTimeout(256, 150);
+    if (d.length) acc += DEC.decode(d);
+    if (/<\d+\.\d+>/.test(acc)) return true;
+  }
+  return false;
+}
+
+/** Clear any partial line left in the module's buffer. */
+async function clearLine(transport) {
+  transport.flush();
+  await transport.tx(ENC.encode('@'));
+  await sleep(250);
+  transport.flush();
+}
+
 /** Re-escape into command mode; returns true once the module answers CMD. */
 async function reenterCommandMode(transport) {
   transport.flush();
@@ -169,6 +203,16 @@ async function reenterCommandMode(transport) {
  */
 async function sendConfig(transport, cmd, log) {
   let r = await line(transport, cmd);
+
+  // "?-Cmd" is WiFly for "I lost characters from that line" — usually stray
+  // bytes prepended to it. Clear the line and send it again rather than
+  // recording a rejection for a command that was never seen intact.
+  if (/\?-/.test(r.raw)) {
+    log(`  ${cmd} → ${r.reply} — line was garbled, clearing and retrying…`, 't-warn');
+    await clearLine(transport);
+    r = await line(transport, cmd);
+  }
+
   if (r.ok || r.err) return r;
 
   if (r.interference || r.silent) {
@@ -210,13 +254,22 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
   // opening $$$ produced no bytes at all and the identical retry a few seconds
   // later answered CMD. So try the same proven path several times rather than
   // giving up after one go and blaming the module.
-  let cmdMode = false;
-  for (let i = 1; i <= 3 && !cmdMode; i++) {
-    if (i > 1) log(`  no CMD — sending $$$ again (attempt ${i})…`, 't-warn');
-    cmdMode = await reenterCommandMode(transport);
-  }
+  // Ask first. A module left in command mode by a previous run answers the
+  // prompt, and must NOT be sent $$$ — that would just wedge '$' characters
+  // into its line buffer and corrupt the first real command.
+  let cmdMode = await inCommandMode(transport);
   if (cmdMode) {
-    log('  module is in command mode (CMD).', 't-ok');
+    log('  module was already in command mode.', 't-ok');
+  } else {
+    for (let i = 1; i <= 3 && !cmdMode; i++) {
+      if (i > 1) log(`  no CMD — sending $$$ again (attempt ${i})…`, 't-warn');
+      cmdMode = await reenterCommandMode(transport);
+      if (!cmdMode) cmdMode = await inCommandMode(transport);   // CMD can be missed
+    }
+  }
+
+  if (cmdMode) {
+    log('  module is in command mode.', 't-ok');
   } else {
     // Not fatal — carry on and let the per-command replies tell the story —
     // but say so, because every command failing afterwards would otherwise be
@@ -224,6 +277,10 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
     log('  no CMD from $$$ after three attempts. ' +
         'The module may not be in command mode.', 't-warn');
   }
+
+  // Clear anything sitting in the module's line buffer before the first real
+  // command — stray characters get prepended to it and come back ERR: ?-Cmd.
+  await clearLine(transport);
 
   const silent = [];
   let sawInterference = false;
