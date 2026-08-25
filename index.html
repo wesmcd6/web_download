@@ -37,6 +37,7 @@
       <button id="disconnect" disabled>Disconnect</button>
       <span id="conn" class="t-dim">not connected</span>
     </div>
+    <div id="connstatus" class="status" hidden></div>
 
     <p class="t-dim" style="margin:.8rem 0 0">
       <strong>USB resets the mount when the port opens</strong> — Windows asserts DTR
@@ -55,6 +56,7 @@
       <button id="read" class="primary">Read settings from the mount</button>
       <span id="readhint" class="t-dim"></span>
     </div>
+    <div id="readstatus" class="status" hidden></div>
 
     <div id="result" hidden></div>
   </details>
@@ -76,6 +78,7 @@
       <span id="upstate" class="verdict" hidden></span>
       <span id="uphint" class="t-dim"></span>
     </div>
+    <div id="upstatus" class="status" hidden></div>
     <div id="upversion" class="verdict-detail" hidden></div>
     <div id="upconfirm" style="margin-top:.6rem"></div>
     <progress id="prog" hidden></progress>
@@ -173,6 +176,31 @@ function log(msg, cls = '') {
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => (
   { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 
+/**
+ * A single overwriting status line next to the button that started the work.
+ *
+ * The log is a scrolling panel at the bottom of the page and is often off
+ * screen — during a 20-second connect there was nothing visible saying anything
+ * was happening at all. This shows the latest message in place, with a spinner
+ * while it is working.
+ */
+function busy(id, text) {
+  const el = $(id);
+  el.hidden = false;
+  el.className = 'status busy';
+  el.textContent = text;
+}
+function settled(id, text, ok) {
+  const el = $(id);
+  el.hidden = false;
+  el.className = `status ${ok ? 't-ok' : 't-err'}`;
+  el.textContent = text;
+}
+function clearStatus(id) { $(id).hidden = true; }
+
+/** Progress sink that both logs and keeps the on-screen line current. */
+const progressTo = (id) => (m) => { log(m); busy(id, m.trim()); };
+
 function row(k, v, extra) {
   return `<tr><th>${esc(k)}</th><td class="val">${esc(v)}${
     extra ? `<br><span class="t-dim">${esc(extra)}</span>` : ''}</td></tr>`;
@@ -210,6 +238,7 @@ let fwDone = false;
 /** Show the outcome next to the button, with the resulting version beneath. */
 function setFirmwareResult(ok, headline, detail) {
   fwDone = true;
+  clearStatus('upstatus');       // the verdict replaces the running commentary
   const btn = $('upload');
   btn.textContent = ok ? 'FIRMWARE UPDATED' : 'UPDATE FAILED';
   btn.className = ok ? 'ok-btn' : 'danger';
@@ -274,6 +303,7 @@ $('go').addEventListener('click', async () => {
   const label = $('go').textContent;
   $('go').disabled = true;
   $('go').textContent = 'Connecting…';
+  busy('connstatus', 'Connecting…');
   try {
     // Drop a cached link that no longer matches the form. Building an HttpLink
     // never touches the network, so a failed Wi-Fi attempt still leaves one.
@@ -284,12 +314,18 @@ $('go').addEventListener('click', async () => {
       await link.close();
       link = null;
     }
-    if (link) { log(`Already connected over ${link.label}.`); return; }
+    if (link) {
+      log(`Already connected over ${link.label}.`);
+      settled('connstatus', `Already connected over ${link.label}.`, true);
+      return;
+    }
 
     if (how === 'http') {
       link = new HttpLink($('mounthost').value);
       log(`Connecting over ${link.label}…`);
+      busy('connstatus', `Contacting ${link.host}…`);
     } else {
+      busy('connstatus', 'Waiting for you to pick a port…');
       const port = await requestPort();
       const t = new SerialTransport(port, { baudRate: 115200, log });
       try {
@@ -301,15 +337,18 @@ $('go').addEventListener('click', async () => {
       }
       link = new SerialLink(t);
       log('Port open. The mount is resetting; the next 15-20s of silence is expected.', 't-dim');
+      busy('connstatus', 'Port open — the mount is resetting, this takes 15-20s…');
     }
 
     // Prove the link before calling it connected.
-    const v = await readVersion(link, 40, 'waiting for the mount');
+    const v = await readVersion(link, 40, 'Waiting for the mount', 'connstatus');
     if (!v) throw new Error('The mount never answered ESGv!.');
     log(`Connected. Mount firmware: ${v}`, 't-ok');
+    settled('connstatus', `Connected. Mount firmware: ${v}`, true);
   } catch (e) {
     if (link) { try { await link.close(); } catch { /* already gone */ } link = null; }
     log(e.message, 't-err');
+    settled('connstatus', e.message, false);
   } finally {
     $('go').disabled = false;
     $('go').textContent = label;
@@ -325,8 +364,8 @@ $('disconnect').addEventListener('click', async () => {
   refresh();
 });
 
-/** Poll ESGv! until the firmware answers. */
-async function readVersion(target, seconds, why) {
+/** Poll ESGv! until the firmware answers. `statusId` gets a live countdown. */
+async function readVersion(target, seconds, why, statusId) {
   const send = target.send
     ? (c, o) => target.send(c, o)
     : (c, o) => ask(target, c, o);
@@ -336,6 +375,7 @@ async function readVersion(target, seconds, why) {
     attempt++;
     const left = Math.ceil((deadline - Date.now()) / 1000);
     log(`  ${why} — ESGv! attempt ${attempt} (${left}s left)`);
+    if (statusId) busy(statusId, `${why}… ${left}s left (try ${attempt})`);
     try {
       const raw = await send('ESGv!', { expect: 'ESGv', timeoutMs: 2000 });
       if (raw.includes('ESGv')) return parseESGv(raw);
@@ -598,13 +638,15 @@ function wireEditor(cfg, envision) {
 
 $('read').addEventListener('click', async () => {
   $('read').disabled = true;
+  const note = progressTo('readstatus');
+  busy('readstatus', 'Reading settings…');
   try {
     if (!link) throw new Error('Connect first.');
-    const info = await identify(link, (m) => log(m));
+    const info = await identify(link, note);
 
     let envision = null;
     try {
-      envision = await readEnvision(link, info, (m) => log(m));
+      envision = await readEnvision(link, info, note);
       log(`Envision / Fast Server: ${envision.text}`);
     } catch (e) {
       envision = { text: 'Not read', error: e.message };
@@ -619,7 +661,7 @@ $('read').addEventListener('click', async () => {
       log('ESP firmware: not readable over Wi-Fi.', 't-dim');
     } else {
       try {
-        esp = await readEspVersion(link, info, (m) => log(m));
+        esp = await readEspVersion(link, info, note);
       } catch (e) {
         esp = { skipped: false, error: e.message };
         log(`ESP firmware read failed: ${e.message}`, 't-err');
@@ -636,8 +678,10 @@ $('read').addEventListener('click', async () => {
 
     show(info, view.baud, envision, esp);
     log('Settings read.', 't-ok');
+    settled('readstatus', `Read OK — ${info.model}, ${info.firmware}`, true);
   } catch (e) {
     log(e.message, 't-err');
+    settled('readstatus', e.message, false);
   } finally {
     refresh();
   }
@@ -678,7 +722,7 @@ async function runUpdate() {
   const t = link.transport;
 
   log('Reading the current firmware version…');
-  const before = await readVersion(link, 40, 'waiting for the mount');
+  const before = await readVersion(link, 40, 'Reading the current version', 'upstatus');
   if (before) log(`Currently running: ${before}`, 't-ok');
   else log('No ESGv! answer. Continuing, but there will be no before-version to ' +
            'compare against.', 't-err');
@@ -688,12 +732,13 @@ async function runUpdate() {
       `encoded, ~${estimateSeconds(payload.length).toFixed(1)}s on the wire.`);
 
   $('prog').hidden = false;
-  const { version, seconds } = await new P1Loader(t, (m) => log(`  ${m}`))
+  busy('upstatus', 'Writing to EEPROM — do not disconnect…');
+  const { version, seconds } = await new P1Loader(t, progressTo('upstatus'))
     .load(image, EEPROM_RUN);
   $('prog').hidden = true;
   log(`Transfer complete in ${seconds.toFixed(1)}s (chip version ${version}).`, 't-ok');
 
-  const after = await readVersion(link, 40, 'waiting for the new firmware to boot');
+  const after = await readVersion(link, 40, 'Waiting for the new firmware to boot', 'upstatus');
   if (!after) {
     log('The transfer was acknowledged but the mount never answered ESGv!. The image ' +
         'may have landed without running — do NOT treat this as a successful update.', 't-err');

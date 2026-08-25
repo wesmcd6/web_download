@@ -133,6 +133,36 @@ details summary { cursor: pointer; color: var(--muted); }
 }
 .mono { font-family: var(--mono); font-size: 13px; }
 
+/* A single overwriting line beside the button that started the work. The log
+   is at the bottom of the page and usually off screen, so without this a
+   20-second connect looked like nothing was happening. */
+.status {
+  display: flex;
+  align-items: center;
+  gap: .55rem;
+  margin-top: .6rem;
+  min-height: 1.3rem;
+  font-size: .9rem;
+  color: var(--muted);
+}
+.status.busy::before {
+  content: '';
+  flex: none;
+  width: .85em;
+  height: .85em;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Respect a reduced-motion preference: pulse instead of spin. */
+@media (prefers-reduced-motion: reduce) {
+  .status.busy::before { animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .25; } }
+}
+
 /* Outcome indicators — the answer should be readable without the log. */
 .verdict {
   font-weight: 800;
