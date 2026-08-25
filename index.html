@@ -85,6 +85,31 @@
   </details>
 
   <!-- 4 ─────────────────────────────────────────────────────────────────── -->
+  <details class="card tool" id="s-rn131">
+    <summary>Restore RN131</summary>
+
+    <span class="badge permanent" style="margin-top:.9rem">Permanent</span>
+    <p>Writes the Explore Scientific factory configuration back to an
+       <strong>RN-131</strong> Wi-Fi module and reboots it — the same sequence UFCT
+       sends. Use it when the module's settings have been lost or changed and it no
+       longer joins a network. <strong>USB only</strong>, and only for RN-131: ESP8266
+       and ESP32 modules are configured a completely different way.</p>
+    <p class="t-dim">It restores the soft-AP at <code>192.168.47.1</code>, device id and
+       passphrase <code>PMC-Eight</code>, and port <code>54372</code>. Any home-network
+       settings on the module are replaced.</p>
+
+    <div class="row" style="margin-top:.9rem">
+      <button id="rnrestore" class="danger" disabled>Restore RN131</button>
+      <span id="rnstate" class="verdict" hidden></span>
+      <span id="rnhint" class="t-dim"></span>
+    </div>
+    <div id="rnstatus" class="status" hidden></div>
+    <div id="rnresult" class="verdict-detail" hidden></div>
+    <div id="rnconfirm" style="margin-top:.6rem"></div>
+    <progress id="rnprog" hidden></progress>
+  </details>
+
+  <!-- 5 ─────────────────────────────────────────────────────────────────── -->
   <details class="card tool" id="s-console">
     <summary>Command console</summary>
 
@@ -138,6 +163,7 @@ import {
   buildESSi, displayValue, writeSettings,
 } from './src/pmc8-settings.js';
 import { COMMANDS, RISK_LABEL, buildCommand, classify } from './src/pmc8-commands.js';
+import { restoreRn131 } from './src/pmc8-rn131.js';
 import { P1Loader } from './src/p1-loader.js';
 import { RUN_FROM_RAM, EEPROM_RUN, estimateSeconds, buildPayload } from './src/p1-protocol.js';
 
@@ -158,6 +184,12 @@ let httpLink = null;
 let link = null;
 let image = null;
 let imageName = '';   // the filename carries the version we are meant to end up at
+
+// Result latches, declared here because refresh() reads them and runs during
+// module init — declaring them next to their sections put them in the temporal
+// dead zone at that point.
+let fwDone = false;
+let rnDone = false;
 
 // The last successful read, so reopening the settings section shows what we
 // already know instead of a blank panel.
@@ -249,11 +281,11 @@ function refresh() {
     $('upload').disabled = !!fwBlock;
     $('uphint').textContent = fwBlock ?? '';
   }
+
+  refreshRn131();
 }
 
 // --- firmware result indicator ---------------------------------------------
-
-let fwDone = false;
 
 /** Show the outcome next to the button, with the resulting version beneath. */
 function setFirmwareResult(ok, headline, detail) {
@@ -874,7 +906,95 @@ $('upload').addEventListener('click', () => {
   });
 });
 
-// --- 4. command console -----------------------------------------------------
+// --- 4. restore RN131 -------------------------------------------------------
+
+function refreshRn131() {
+  if (rnDone) return;
+  // The mount reports the module in ESGi!'s `w` field, so we know before
+  // offering this whether it even applies.
+  const w = lastInfo?.wifiType;
+  const blocker = !hasSerial() ? 'Connect over USB first — this needs the cable.'
+                : w === undefined ? 'Read the settings first, so the module type is known.'
+                : w !== 0 ? `This mount reports ${lastInfo.wifi}, not an RN-131. ` +
+                            'ESP modules are configured a different way.'
+                : null;
+  $('rnrestore').disabled = !!blocker;
+  $('rnhint').textContent = blocker ?? 'RN-131 detected.';
+}
+
+$('s-rn131').addEventListener('toggle', () => {
+  if (!$('s-rn131').open) return;
+  if (rnDone) {                       // revisiting clears the previous verdict
+    rnDone = false;
+    $('rnrestore').textContent = 'Restore RN131';
+    $('rnrestore').className = 'danger';
+    $('rnstate').hidden = true;
+    $('rnresult').hidden = true;
+  }
+  refreshRn131();
+});
+
+$('rnrestore').addEventListener('click', () => {
+  const host = $('rnconfirm');
+  host.innerHTML = '';
+  const panel = document.createElement('div');
+  panel.className = 'notice';
+  panel.innerHTML = `
+    <div><strong>Restore the RN-131 to factory configuration?</strong></div>
+    <p style="margin:.5rem 0">This overwrites the module's settings, including any
+       home-network configuration, and reboots it. It takes about half a minute.
+       Do not disconnect while it runs.</p>
+    <div class="row">
+      <button class="danger" data-act="go">Yes, restore it</button>
+      <button data-act="cancel">Cancel</button>
+    </div>`;
+  host.appendChild(panel);
+  panel.querySelector('[data-act=cancel]').addEventListener('click', () => {
+    host.innerHTML = '';
+    log('Cancelled — the module was not changed.', 't-dim');
+  });
+  panel.querySelector('[data-act=go]').addEventListener('click', async () => {
+    host.innerHTML = '';
+    $('rnrestore').disabled = true;
+    $('rnprog').hidden = false;
+    busy('rnstatus', 'Starting…');
+    try {
+      const res = await restoreRn131(
+        serialLink.transport,
+        (m, cls) => log(m, cls),
+        (step, total, what) => busy('rnstatus', `${step}/${total} — ${what}`));
+
+      rnDone = true;
+      clearStatus('rnstatus');
+      $('rnprog').hidden = true;
+      const ok = res.ok;
+      $('rnrestore').textContent = ok ? 'RN131 RESTORED' : 'RESTORE INCOMPLETE';
+      $('rnrestore').className = ok ? 'ok-btn' : 'danger';
+      $('rnstate').hidden = false;
+      $('rnstate').textContent = ok ? '✓' : '✕';
+      $('rnstate').className = `verdict ${ok ? 'good' : 'bad'}`;
+      $('rnresult').hidden = false;
+      $('rnresult').className = `verdict-detail ${ok ? 'good' : 'bad'}`;
+      $('rnresult').innerHTML = ok
+        ? '<strong>Factory configuration written and the module rebooted.</strong>' +
+          '<br><span class="t-dim">Soft AP <code>PMC-Eight</code> at ' +
+          '192.168.47.1, port 54372. Power-cycle the mount before connecting.</span>'
+        : `<strong>${res.failures.length} command${res.failures.length > 1 ? 's were' : ' was'} ` +
+          'rejected by the module.</strong><br><span class="t-dim">' +
+          esc(res.failures.map((f) => `${f.cmd} → ${f.reply}`).join('; ')) + '</span>';
+      log(ok ? 'RN131 restore complete.' : 'RN131 restore finished with rejections.',
+          ok ? 't-ok' : 't-err');
+    } catch (e) {
+      log(`RN131 restore failed: ${e.message}`, 't-err');
+      settled('rnstatus', e.message, false);
+    } finally {
+      $('rnprog').hidden = true;
+      refreshRn131();
+    }
+  });
+});
+
+// --- 5. command console -----------------------------------------------------
 
 // Amber, not red: describing what a command does is information, not an error.
 const RISK_CLASS = { read: 't-dim', write: 't-warn', motion: 't-warn', reboot: 't-warn' };
