@@ -980,10 +980,6 @@ $('rnrestore').addEventListener('click', () => {
       $('rnresult').hidden = false;
       $('rnresult').className = `verdict-detail ${ok ? 'good' : 'bad'}`;
       const parts = [];
-      if (res.aborted) {
-        parts.push('<strong>Could not put the module into command mode, so nothing ' +
-          'was sent.</strong><br><span class="t-dim">' + esc(res.aborted) + '</span>');
-      }
       if (res.failures.length) {
         parts.push(`<strong>${res.failures.length} command` +
           `${res.failures.length > 1 ? 's were' : ' was'} rejected by the module.</strong>` +

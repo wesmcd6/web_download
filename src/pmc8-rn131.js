@@ -115,15 +115,8 @@ export function restoreSucceeded({ failures = [], silent = [] } = {}) {
  */
 const INTERFERENCE = /\*OPEN\*|\*CLOS\*|ES[A-Z]/;
 
-/**
- * Settle after writing before reading, and a gap before the next command.
- *
- * UFCT sleeps 400ms inside every SetRN131Config AND opens/closes the COM port
- * around each one, so its real spacing is well over half a second. Matching the
- * 400ms alone was still too fast.
- */
-const SETTLE_MS = 500;
-const GAP_MS = 120;
+/** Settle after writing before reading — UFCT waits 400ms, the Dashboard 300ms. */
+const SETTLE_MS = 400;
 
 async function line(transport, text, timeoutMs = 2000) {
   await transport.tx(ENC.encode(`${text}@`));
@@ -155,51 +148,19 @@ async function line(transport, text, timeoutMs = 2000) {
   };
 }
 
-/**
- * Escape into command mode. Mirrors the Dashboard's _net_rn131_command_mode,
- * which is the version proven to work in the field.
- *
- * '$$$' takes no terminator and WiFly wants a quiet guard period either side of
- * it. Anything the module is saying — an association notice, a join retry, a
- * TCP client's traffic — violates that quiet and the escape is simply ignored.
- * Hence: drain first, wait, send, wait 2s, and retry once if the module was
- * mid-association.
- *
- * Returns { ok, reply, reason }.
- */
-async function enterCommandMode(transport, log = () => {}) {
-  const attempt = async () => {
-    transport.flush();                    // the VB tool's DiscardIn/Out
-    await sleep(300);
-    await transport.tx(ENC.encode('$$$'));
-    const deadline = Date.now() + 2500;   // the Dashboard waits 2s here
-    let acc = '';
-    while (Date.now() < deadline) {
-      const d = await transport.rxTimeout(256, 200);
-      if (d.length) acc += DEC.decode(d);
-      if (/CMD/i.test(acc)) break;
-    }
-    return acc.replace(/[\r\n]+/g, ' ').trim();
-  };
-
-  let reply = await attempt();
-  if (/Auto-/i.test(reply)) {
-    // Module was mid-association and answered with its Auto-Assoc notice
-    // instead of taking the escape. The VB tool re-sends once here.
-    log('  module is still associating — re-sending $$$…', 't-warn');
-    reply = await attempt();
+/** Re-escape into command mode; returns true once the module answers CMD. */
+async function reenterCommandMode(transport) {
+  transport.flush();
+  await sleep(300);                       // WiFly wants a quiet guard time
+  await transport.tx(ENC.encode('$$$'));
+  const deadline = Date.now() + 2500;
+  let acc = '';
+  while (Date.now() < deadline) {
+    const d = await transport.rxTimeout(256, 200);
+    if (d.length) acc += DEC.decode(d);
+    if (/CMD/i.test(acc)) return true;
   }
-  if (/CMD/i.test(reply)) return { ok: true, reply };
-
-  if (/AUTH-ERR|Disconn/i.test(reply)) {
-    return { ok: false, reply, reason:
-      'The module is stuck retrying a failed network join (AUTH-ERR). That ' +
-      'status spam violates the quiet time the $$$ escape needs, so command ' +
-      'mode cannot be entered. Power-cycle the mount and try again immediately, ' +
-      'before it starts retrying.' };
-  }
-  return { ok: false, reply, reason:
-    `The module did not answer $$$ with CMD${reply ? ` (got: ${reply})` : ''}.` };
+  return false;
 }
 
 /**
@@ -213,12 +174,11 @@ async function sendConfig(transport, cmd, log) {
   if (r.interference || r.silent) {
     log(`  ${cmd} — no usable answer${r.raw ? ` (${r.raw})` : ''}; ` +
         're-entering command mode and retrying…', 't-warn');
-    const back = await enterCommandMode(transport, log);
-    if (back.ok) {
+    if (await reenterCommandMode(transport)) {
       r = await line(transport, cmd);
       if (r.ok) log('  back in command mode.', 't-dim');
     } else {
-      log(`  could not get back into command mode. ${back.reason}`, 't-err');
+      log('  could not get back into command mode.', 't-err');
     }
   }
   return r;
@@ -243,23 +203,27 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
   const entered = DEC.decode(await transport.rxTimeout(256, 600)).trim();
   if (entered) log(`  ${entered}`);
 
-  const cmd = await enterCommandMode(transport, log);
-  if (cmd.ok) {
+  // $$$ is the RN-131's Hayes-style escape. It takes no terminator, and the
+  // module wants a quiet period either side of it. It answers "CMD".
+  await sleep(300);
+  transport.flush();
+  await transport.tx(ENC.encode('$$$'));
+  let cmdMode = '';
+  const escDeadline = Date.now() + 2000;
+  while (Date.now() < escDeadline) {
+    const d = await transport.rxTimeout(256, 200);
+    if (d.length) cmdMode += DEC.decode(d);
+    if (/CMD/i.test(cmdMode)) break;
+  }
+  cmdMode = cmdMode.replace(/[\r\n]+/g, ' ').trim();
+  if (/CMD/i.test(cmdMode)) {
     log('  module is in command mode (CMD).', 't-ok');
   } else {
-    // Bail rather than sending 34 commands into a module that is not listening
-    // — which is what produced a screen full of failures and no explanation.
-    log(`  ${cmd.reason}`, 't-err');
-    try {
-      transport.flush();
-      await transport.tx(ENC.encode('###'));
-      await sleep(400);
-    } catch { /* nothing useful to do */ }
-    return {
-      ok: false, steps: 0, failures: [], silent: [],
-      interference: INTERFERENCE.test(cmd.reply ?? ''),
-      aborted: cmd.reason,
-    };
+    // Not fatal — carry on and let the per-command replies tell the story —
+    // but say so, because every command failing afterwards would otherwise be
+    // a mystery rather than an obvious consequence.
+    log(`  no CMD from $$$${cmdMode ? ` (got: ${cmdMode})` : ''}. ` +
+        'The module may not be in command mode.', 't-warn');
   }
 
   const silent = [];
@@ -280,7 +244,6 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
           silent.push(cmd);
           log(`  ${cmd} → not confirmed${r.raw ? ` (${r.raw})` : ''}`, 't-warn');
         }
-        await sleep(GAP_MS);
       }
 
       const s = await sendConfig(transport, 'save', log);
@@ -303,24 +266,8 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
     await line(transport, 'reboot', 800);
     bump('reboot');
   } finally {
-    // MUST leave the module's command mode, not just the Propeller's
-    // passthrough. '###' closes passthrough only; a module left in command mode
-    // keeps its DATA LINK DEAD until it reboots
-    // (PMC8-Dashboard/network_management.py:562-565). If the reboot above did
-    // not take — and on a corrupted run it will not have — this is the only
-    // thing standing between a tidy exit and a module that answers nothing on
-    // the next attempt.
-    try {
-      await transport.tx(ENC.encode('exit@'));
-      await sleep(300);
-      const bye = DEC.decode(await transport.rxTimeout(256, 400))
-        .replace(/[\r\n]+/g, ' ').trim();
-      log(`  left the module's command mode${bye ? ` (${bye})` : ''}.`, 't-dim');
-    } catch (e) {
-      log(`  could not leave command mode: ${e.message}`, 't-err');
-    }
-
-    // Then leave passthrough, so the mount answers ES commands again.
+    // Always leave passthrough, whatever happened above — otherwise the mount
+    // stays deaf to ES commands until it is power-cycled.
     log('Leaving passthrough (###)…');
     try {
       transport.flush();
