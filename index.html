@@ -46,6 +46,13 @@
       the mount rebooting. It happens once; the port then stays open.
       <strong>Wi-Fi does not reset the mount</strong>, but cannot reach the ESP
       firmware version or load firmware.</p>
+
+    <p class="t-dim" style="margin:.6rem 0 0">
+      <strong>Wi-Fi needs the ES HTTP bridge</strong> (port 80). An
+      <strong>RN-131</strong>, or an ESP8266/ESP32 on older firmware, speaks raw TCP
+      on 54372 instead — and a browser cannot open a raw socket, so those mounts are
+      USB-only here. An ESP8266 or ESP32 running the current bridge firmware connects
+      over Wi-Fi normally.</p>
   </details>
 
   <!-- 2 ─────────────────────────────────────────────────────────────────── -->
@@ -416,11 +423,17 @@ if (!serialAvailable() || HTTPS_BLOCKS_WIFI) {
 
 function refreshHow() {
   const wifi = $('how').value === 'http';
+  // An RN-131 speaks raw TCP only, so Wi-Fi from a browser is impossible for
+  // it — say so up front rather than after a failed attempt. We know the
+  // module from ESGi!'s `w` field once the settings have been read.
+  const isRn131 = lastInfo?.wifiType === 0;
   $('mounthost').disabled = !wifi || HTTPS_BLOCKS_WIFI;
   $('mounthost').style.opacity = wifi && !HTTPS_BLOCKS_WIFI ? '1' : '0.4';
   $('wifinote').textContent = !wifi ? '(Wi-Fi only)'
     : HTTPS_BLOCKS_WIFI ? 'unavailable on https:// — see below'
+    : isRn131 ? 'RN-131 has no HTTP bridge — USB only'
     : '';
+  $('wifinote').className = wifi && (HTTPS_BLOCKS_WIFI || isRn131) ? 't-warn' : 't-dim';
 }
 
 if (HTTPS_BLOCKS_WIFI) {

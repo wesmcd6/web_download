@@ -43,6 +43,27 @@ export class SerialLink {
  * response body, matching HttpMountClient.SendCommandAsync in the PWA.
  */
 /**
+ * Wi-Fi from a browser needs the mount to run the ES **HTTP bridge**, which
+ * answers `POST /cmd` on port 80. That is the whole story, and the module type
+ * is only a proxy for it:
+ *
+ *   RN-131                      never. It speaks raw TCP on 54372 only.
+ *   ESP8266 / ESP32, legacy     no. Same raw-TCP-only story.
+ *   ESP8266 / ESP32, new bridge yes. This is the case Wi-Fi was built for.
+ *
+ * A browser cannot open a raw TCP socket at all — fetch() speaks HTTP and
+ * nothing else — so a mount without the bridge is unreachable from a web page
+ * no matter what the page does. The PWA reaches those mounts only because
+ * mount-proxy.js does the TCP for it from Node.
+ */
+const NO_BRIDGE = (host, why) =>
+  `No HTTP bridge at ${host} (${why}). Wi-Fi from a browser needs the ES HTTP ` +
+  'bridge on port 80. An RN-131, or an ESP8266/ESP32 running older firmware, ' +
+  'speaks raw TCP on 54372 instead — which a browser cannot open at all. Use ' +
+  'the USB cable for those. Also check the address, that this device is on the ' +
+  'same network, and that this page is served over http:// rather than https://.';
+
+/**
  * Normalise a typed-in mount address. Exported so callers can compare what the
  * user has typed against an existing link's host without building one.
  */
@@ -87,14 +108,10 @@ export class HttpLink {
       if (!res.ok) throw new Error(`Mount returned HTTP ${res.status}`);
       return await res.text();
     } catch (e) {
-      if (e.name === 'AbortError') throw new Error(`No reply from ${this.host} (timed out)`);
-      // fetch() reports CORS and mixed-content failures as an opaque TypeError.
-      if (e instanceof TypeError) {
-        throw new Error(
-          `Could not reach ${this.host}. Check the IP and that this device is on ` +
-          'the same network. If this page is on HTTPS, the browser blocks calls ' +
-          'to a plain-HTTP mount — load the page over http:// instead.');
-      }
+      if (e.name === 'AbortError') throw new Error(NO_BRIDGE(this.host, 'timed out'));
+      // fetch() reports CORS, mixed-content and connection-refused failures
+      // alike as an opaque TypeError, so the message has to cover the field.
+      if (e instanceof TypeError) throw new Error(NO_BRIDGE(this.host, 'no answer'));
       throw e;
     } finally {
       clearTimeout(timer);
