@@ -306,6 +306,7 @@ export async function readEspVersion(transport, cfg, log = () => {}) {
   if (cfg.wifiType === 0) {
     return {
       skipped: true,
+      why: 'rn131',
       reason: 'RN-131 does not use the AT command set — passthrough not attempted.',
     };
   }

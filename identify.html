@@ -170,8 +170,13 @@ function show(info, baud, envision, esp) {
   } else {
     const g = esp.gmr;
     if (esp.skipped) {
-      espFirmware = row('ESP firmware', 'Not applicable — RN-131',
-                        esp.reason ?? 'RN-131 does not use the AT command set.');
+      // Two quite different skips: the module genuinely has no AT command set,
+      // or the link we are on cannot carry passthrough. Saying "RN-131" for
+      // the second one contradicts the WiFi Type row two lines below it.
+      espFirmware = row(
+        'ESP firmware',
+        esp.why === 'wifi' ? 'Not readable over Wi-Fi' : 'Not applicable — RN-131',
+        esp.reason);
     } else if (g && g.bin) {
       espFirmware = row('ESP firmware', g.bin,
                         g.esBranded ? null : 'Not an ES-branded build.');
@@ -229,8 +234,11 @@ function show(info, baud, envision, esp) {
 
   $('copycfg').addEventListener('click', () => {
     const lines = [`Mount firmware: ${info.firmware}`];
-    if (esp?.skipped) lines.push('ESP firmware: not applicable — RN-131');
-    else if (esp?.gmr?.bin) lines.push(`ESP firmware: ${esp.gmr.bin}`);
+    if (esp?.skipped) {
+      lines.push(esp.why === 'wifi'
+        ? 'ESP firmware: not readable over Wi-Fi'
+        : 'ESP firmware: not applicable — RN-131');
+    } else if (esp?.gmr?.bin) lines.push(`ESP firmware: ${esp.gmr.bin}`);
     else if (esp) lines.push('ESP firmware: not read');
     if (esp?.gmr?.tag) {
       lines.push(`Module hardware: ${esp.gmr.module ?? 'unrecognized'} (${esp.gmr.tag})`);
@@ -399,8 +407,12 @@ $('go').addEventListener('click', async () => {
     // would sever the very link carrying the request.
     let esp = null;
     if (!link.canPassthrough) {
-      esp = { skipped: true, reason: 'Needs the USB cable — passthrough would ' +
-                                     'cut the Wi-Fi link it runs over.' };
+      esp = {
+        skipped: true,
+        why: 'wifi',
+        reason: 'Reading it needs passthrough, which would cut the Wi-Fi link ' +
+                'carrying the request. Connect the USB cable to see this.',
+      };
       log('ESP firmware: not readable over Wi-Fi.', 't-dim');
     } else {
       try {
@@ -410,7 +422,7 @@ $('go').addEventListener('click', async () => {
         esp = { skipped: false, error: e.message };
         log(`ESP firmware read failed: ${e.message}`, 't-err');
       }
-      if (esp.skipped) log(`Module version skipped: ${esp.reason}`, 't-dim');
+      if (esp.skipped) log(`ESP firmware skipped: ${esp.reason}`, 't-dim');
       else if (esp.error) log(`AT+GMR: ${esp.error}`, 't-err');
       else {
         log(`Module bin version: ${esp.gmr?.bin ?? '(unknown)'}`, 't-ok');
