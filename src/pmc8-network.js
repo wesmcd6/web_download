@@ -161,6 +161,8 @@ export async function readWifiAddress(link, module, log = () => {}) {
         return { ip: extractIp(raw), raw };
       } finally {
         // Must leave command mode, not just passthrough — see the join path.
+        // Nothing rebooted on this path, so EXIT really is expected here; a
+        // missing one is worth noting.
         if (inCmd) {
           const bye = await line(transport, 'exit', 1500);
           log(/EXIT/i.test(bye.raw)
@@ -307,12 +309,16 @@ export async function configureHomeNetwork(link, module, ssid, password, log = (
         // '###' below closes the Propeller's passthrough only. A module left in
         // command mode has NO DATA LINK until it reboots, so this must run
         // whatever happened above.
+        //
+        // No EXIT reply is expected here. The settings were saved and the module
+        // rebooted partway through this flow, so by the time we leave it is not
+        // in the state that answers. Silence is normal — do not flag it.
         if (inCmd) {
           const bye = await line(transport, 'exit', 1500);
           log(/EXIT/i.test(bye.raw)
             ? '  module back in data mode (EXIT).'
-            : `  sent exit${bye.raw ? ` — module said: ${bye.raw}` : ', no EXIT confirmation'}.`,
-            /EXIT/i.test(bye.raw) ? 't-ok' : 't-warn');
+            : '  left command mode (no EXIT reply, as expected after the reboot).',
+            /EXIT/i.test(bye.raw) ? 't-ok' : 't-dim');
         }
       }
     }
