@@ -19,8 +19,11 @@
        and the Wi-Fi module's. Reading changes nothing and moves no motor.</p>
     <p>Once read, the settings become editable. Saving writes them to the mount's
        EEPROM, and asks first.</p>
-    <p>Opening the port can make the mount reboot on its own, which takes 15–20&nbsp;seconds.
-       If that happens this just keeps asking until it answers — leave it running.</p>
+    <p><strong>Opening the USB port resets the mount</strong> — Windows asserts DTR
+       while configuring the port and DTR is the Propeller's reset line. Nothing in
+       the browser can prevent it. The connection then stays open for the whole
+       session, so it happens once, not on every read. <strong>Wi-Fi does not reset
+       the mount at all</strong>, so use it if a reset is unwelcome.</p>
     <div class="row" style="margin-bottom:.9rem">
       <label>Connect over
         <select id="how" style="font:inherit;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:.35rem .5rem">
@@ -219,6 +222,12 @@ function show(info, baud, envision, esp) {
     if (!esp.skipped && !esp.esRestored) {
       moduleDetail += row('Passthrough', 'ES commands did not answer after exit',
                           'Power-cycle the mount.');
+    }
+    if (esp.leftEnvision) {
+      moduleDetail += row('Envision', 'Turned OFF to read the module version',
+                          'Reading the ESP firmware needs passthrough, which ' +
+                          'cannot run in Envision mode. The mount has been left ' +
+                          'out of Envision.');
     }
   }
 
@@ -459,6 +468,12 @@ $('go').addEventListener('click', async () => {
         const t = new SerialTransport(port, { baudRate: 115200, log });
         await t.open();
         link = new SerialLink(t);
+        // Windows asserts DTR while configuring the port, before any of our
+        // code runs, and DTR is the Propeller's reset line. Nothing in Web
+        // Serial can prevent that — SerialOptions has no DTR field. Say so
+        // rather than leaving a 20-second silence looking like a fault.
+        log('Port open. Opening it resets the mount on Windows, so it may take ' +
+            '15-20s to answer — this is expected, not a fault.', 't-dim');
       }
     }
 
@@ -496,7 +511,7 @@ $('go').addEventListener('click', async () => {
       log('ESP firmware: not readable over Wi-Fi.', 't-dim');
     } else {
       try {
-        esp = await readEspVersion(link.transport, info, (m) => log(m));
+        esp = await readEspVersion(link, info, (m) => log(m));
       } catch (e) {
         // Never let the module read take the whole report down with it.
         esp = { skipped: false, error: e.message };
@@ -515,6 +530,10 @@ $('go').addEventListener('click', async () => {
       if (esp.entered && !esp.exited) {
         log('WARNING: no exit confirmation from passthrough. If the mount stops ' +
             'answering ES commands, power-cycle it.', 't-err');
+      }
+      if (esp.leftEnvision) {
+        log('NOTE: the mount was taken OUT of Envision mode to read this and has ' +
+            'been left that way.', 't-err');
       }
     }
 

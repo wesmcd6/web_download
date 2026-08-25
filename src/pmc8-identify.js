@@ -297,7 +297,59 @@ export function parseGmr(reply) {
  *
  * Skipped on RN-131, which does not use the AT command set.
  */
-export async function readEspVersion(transport, cfg, log = () => {}) {
+/** Poll ESGv! until the command interpreter answers again. */
+export async function waitForMount(link, waitMs = 45000, log = () => {}) {
+  const deadline = Date.now() + waitMs;
+  let attempt = 0;
+  while (Date.now() < deadline) {
+    attempt++;
+    const left = Math.ceil((deadline - Date.now()) / 1000);
+    log(`  waiting for the mount to come back (${left}s left)…`);
+    try {
+      const raw = await link.send('ESGv!', { expect: 'ESGv', timeoutMs: 2000 });
+      if (raw.includes('ESGv')) return true;
+    } catch { /* still down */ }
+    await sleep(700);
+  }
+  return false;
+}
+
+/**
+ * Leave Envision mode so passthrough can run.
+ *
+ * Reply contract (firmware :4639-4652) — note the asymmetry:
+ *   already off -> replies "ESSe0!" and returns, nothing happens
+ *   really exiting -> NO reply to the host at all. The firmware switches the
+ *                     I/O channel to the module and emits ~BOOT!, then blocks
+ *                     ~10s before rebuilding the AT session.
+ *
+ * So silence here is success, not failure. Afterwards the mount is left OUT of
+ * Envision — the caller must say so, because that persists.
+ */
+export async function exitEnvision(link, log = () => {}) {
+  log('Mount is in Envision mode — leaving it (ESSe0!) so passthrough can run.');
+  log('  the Wi-Fi module reboots; this takes around 20 seconds.');
+
+  let raw = '';
+  try {
+    raw = await link.send('ESSe0!', { expect: 'ESSe', timeoutMs: 3000 });
+  } catch { /* a dropped link during the reboot is expected */ }
+
+  if (raw.includes('ESSe0!')) log('  mount reports Envision was already off.');
+
+  if (!await waitForMount(link, 45000, log)) {
+    return { ok: false, error: 'The mount never answered after leaving Envision.' };
+  }
+
+  const st = parseESGe(await link.send('ESGe!', { expect: 'ESGe', timeoutMs: 4000 }));
+  if (st?.on) {
+    return { ok: false, envision: st, error: 'The mount still reports Envision running.' };
+  }
+  log('  Envision is off.');
+  return { ok: true, envision: st };
+}
+
+export async function readEspVersion(link, cfg, log = () => {}) {
   // Third possibility, and it must be refused before anything is sent: an
   // RN-131 is not an AT-command device at all. Its command mode works
   // differently, so ESPw42! + AT would be meaningless at best. The mount
@@ -311,8 +363,31 @@ export async function readEspVersion(transport, cfg, log = () => {}) {
     };
   }
 
-  const result = { skipped: false, entered: false, exited: false, gmr: null };
+  const result = {
+    skipped: false, entered: false, exited: false, gmr: null,
+    leftEnvision: false,
+  };
 
+  // Passthrough cannot run while the module is in Envision mode: the PMC8<->ESP
+  // link is carrying raw ES framing, not an AT session. Ask first, and exit if
+  // needed — this is the step whose absence made AT+GMR fail on an Envision
+  // mount while working fine on a normal one.
+  try {
+    const st = parseESGe(await link.send('ESGe!', { expect: 'ESGe', timeoutMs: 4000 }));
+    if (st?.on) {
+      const r = await exitEnvision(link, log);
+      result.leftEnvision = r.ok;
+      if (!r.ok) {
+        result.error = `Could not leave Envision mode: ${r.error}`;
+        return result;
+      }
+    }
+  } catch (e) {
+    result.error = `Could not check Envision mode: ${e.message}`;
+    return result;
+  }
+
+  const transport = link.transport;
   log('Entering passthrough (ESPw42!)…');
   transport.flush();
   await transport.tx(ENC.encode('ESPw42!'));
