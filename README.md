@@ -59,10 +59,19 @@ Windows will not share the COM port.
 node test/run-tests.mjs
 ```
 
-51 assertions, no hardware needed: the LFSR, the 11-byte long encoder, the
-509-byte handshake, the full payload for a real firmware image, and the
-`ESGv!`/`ESGi!` parsers. Regenerate the vectors with
+192 assertions, no hardware needed: the LFSR, the 11-byte long encoder, the
+509-byte handshake, the full payload for a real firmware image, the
+`ESGv!`/`ESGi!`/`ESGe!`/`AT+GMR` parsers, the `ESSi!` builder, the command
+table, and the RN-131 restore sequence. Regenerate the protocol vectors with
 `python test/generate-vectors.py` if `p1_loader.py` ever changes.
+
+```sh
+node test/compare-ufct.mjs [path-to-Form1.Wifi.vb]
+```
+
+Re-derives the RN-131 restore sequence from UFCT's VB source and diffs it
+against ours, segment boundaries included. Kept out of the main run because it
+needs the UFCT checkout.
 
 ## Layout
 
