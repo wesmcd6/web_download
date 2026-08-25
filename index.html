@@ -97,6 +97,10 @@
     <p class="t-dim">It restores the soft-AP at <code>192.168.47.1</code>, device id and
        passphrase <code>PMC-Eight</code>, and port <code>54372</code>. Any home-network
        settings on the module are replaced.</p>
+    <p class="t-warn"><strong>Disconnect anything else talking to the mount over
+       Wi-Fi first</strong> — an app or PWA polling the mount shares the same Wi-Fi
+       module, and its traffic knocks the module out of command mode partway
+       through.</p>
 
     <div class="row" style="margin-top:.9rem">
       <button id="rnrestore" class="danger" disabled>Restore RN131</button>
@@ -975,19 +979,28 @@ $('rnrestore').addEventListener('click', () => {
       $('rnstate').className = `verdict ${ok ? 'good' : 'bad'}`;
       $('rnresult').hidden = false;
       $('rnresult').className = `verdict-detail ${ok ? 'good' : 'bad'}`;
-      const unconfirmed = res.silent.length
-        ? `<br><span class="t-warn">${res.silent.length} command(s) sent with no reply ` +
-          `from the module, so they cannot be confirmed: ${esc(res.silent.join(', '))}</span>`
-        : '';
+      const parts = [];
+      if (res.failures.length) {
+        parts.push(`<strong>${res.failures.length} command` +
+          `${res.failures.length > 1 ? 's were' : ' was'} rejected by the module.</strong>` +
+          `<br><span class="t-dim">${esc(res.failures.map((f) => `${f.cmd} → ${f.reply}`).join('; '))}</span>`);
+      }
+      if (res.silent.length) {
+        parts.push(`<strong>${res.silent.length} command(s) were never confirmed</strong>, ` +
+          'so the restore is incomplete.<br><span class="t-dim">' +
+          `${esc(res.silent.join(', '))}</span>`);
+      }
+      if (res.interference) {
+        parts.push('<strong>Another client was using the mount over Wi-Fi.</strong>' +
+          '<br><span class="t-dim">Its traffic shares the Wi-Fi module and knocks it ' +
+          'out of command mode. Close the app or PWA connected to the mount, then ' +
+          'run this again.</span>');
+      }
       $('rnresult').innerHTML = ok
         ? '<strong>Factory configuration written and the module rebooted.</strong>' +
-          '<br><span class="t-dim">Soft AP <code>PMC-Eight</code> at ' +
-          '192.168.47.1, port 54372. Power-cycle the mount before connecting.</span>' +
-          unconfirmed
-        : `<strong>${res.failures.length} command${res.failures.length > 1 ? 's were' : ' was'} ` +
-          'rejected by the module.</strong><br><span class="t-dim">' +
-          esc(res.failures.map((f) => `${f.cmd} → ${f.reply}`).join('; ')) + '</span>' +
-          unconfirmed;
+          '<br><span class="t-dim">Every command confirmed. Soft AP <code>PMC-Eight</code> ' +
+          'at 192.168.47.1, port 54372. Power-cycle the mount before connecting.</span>'
+        : parts.join('<hr style="border:0;border-top:1px solid var(--line);margin:.6rem 0">');
       log(ok ? 'RN131 restore complete.' : 'RN131 restore finished with rejections.',
           ok ? 't-ok' : 't-err');
     } catch (e) {

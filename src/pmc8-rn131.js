@@ -80,6 +80,17 @@ export function restoreCommandList() {
 export const RESTORE_STEP_COUNT = restoreCommandList().length + 1;
 
 /**
+ * A restore only succeeded if every command was confirmed.
+ *
+ * An unanswered command is NOT a success. Treating silence as success reported
+ * green while seven commands had gone unconfirmed, which is worse than
+ * reporting nothing — the user walks away believing the module was restored.
+ */
+export function restoreSucceeded({ failures = [], silent = [] } = {}) {
+  return failures.length === 0 && silent.length === 0;
+}
+
+/**
  * Send one line through passthrough and read the module's answer.
  *
  * In command mode the RN-131 echoes the command, then answers `AOK` or
@@ -95,8 +106,23 @@ export const RESTORE_STEP_COUNT = restoreCommandList().length + 1;
  *   - it read for a fixed 200 ms, which is shorter than the module often
  *     takes, so most replies were simply missed.
  */
+/**
+ * WiFly status notices that mean a TCP client is talking to the module while we
+ * are trying to configure it. `*OPEN*` / `*CLOS*` bracket a connection, and the
+ * ES command that follows (`ESV!` and friends) is that client's traffic being
+ * forwarded through the very link we are using. It corrupts replies and can
+ * drop the module out of command mode.
+ */
+const INTERFERENCE = /\*OPEN\*|\*CLOS\*|ES[A-Z]/;
+
+/** Settle after writing before reading — UFCT waits 400ms, the Dashboard 300ms. */
+const SETTLE_MS = 400;
+
 async function line(transport, text, timeoutMs = 2000) {
   await transport.tx(ENC.encode(`${text}@`));
+  // Give the module time to start answering. Reading immediately and breaking
+  // at the first pause was catching the tail of the previous reply instead.
+  await sleep(SETTLE_MS);
 
   const deadline = Date.now() + timeoutMs;
   let acc = '';
@@ -118,7 +144,44 @@ async function line(transport, text, timeoutMs = 2000) {
     ok: /\bAOK\b/i.test(clean),
     err: /\bERR\b/i.test(clean),
     silent: clean === '',
+    interference: INTERFERENCE.test(clean),
   };
+}
+
+/** Re-escape into command mode; returns true once the module answers CMD. */
+async function reenterCommandMode(transport) {
+  transport.flush();
+  await sleep(300);                       // WiFly wants a quiet guard time
+  await transport.tx(ENC.encode('$$$'));
+  const deadline = Date.now() + 2500;
+  let acc = '';
+  while (Date.now() < deadline) {
+    const d = await transport.rxTimeout(256, 200);
+    if (d.length) acc += DEC.decode(d);
+    if (/CMD/i.test(acc)) return true;
+  }
+  return false;
+}
+
+/**
+ * Send a config line, and if the module was knocked out of command mode by
+ * another client's traffic, escape back in and try once more.
+ */
+async function sendConfig(transport, cmd, log) {
+  let r = await line(transport, cmd);
+  if (r.ok || r.err) return r;
+
+  if (r.interference || r.silent) {
+    log(`  ${cmd} — no usable answer${r.raw ? ` (${r.raw})` : ''}; ` +
+        're-entering command mode and retrying…', 't-warn');
+    if (await reenterCommandMode(transport)) {
+      r = await line(transport, cmd);
+      if (r.ok) log('  back in command mode.', 't-dim');
+    } else {
+      log('  could not get back into command mode.', 't-err');
+    }
+  }
+  return r;
 }
 
 /**
@@ -164,33 +227,37 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
   }
 
   const silent = [];
+  let sawInterference = false;
   try {
     for (const group of RN131_RESTORE_GROUPS) {
       log(`${group.title}…`);
       for (const cmd of group.cmds) {
-        const r = await line(transport, cmd);
+        const r = await sendConfig(transport, cmd, log);
         bump(cmd);
+        if (r.interference) sawInterference = true;
         if (r.err) {
           failures.push({ cmd, reply: r.reply });
           log(`  ${cmd} → ${r.reply}`, 't-err');
-        } else if (r.silent) {
-          silent.push(cmd);
-          log(`  ${cmd} → no reply`, 't-warn');
+        } else if (r.ok) {
+          log(`  ${cmd} → ${r.reply || 'AOK'}`, 't-ok');
         } else {
-          log(`  ${cmd} → ${r.reply || 'OK'}`, 't-ok');
+          silent.push(cmd);
+          log(`  ${cmd} → not confirmed${r.raw ? ` (${r.raw})` : ''}`, 't-warn');
         }
       }
 
-      const s = await line(transport, 'save');
+      const s = await sendConfig(transport, 'save', log);
       bump('save');
+      if (s.interference) sawInterference = true;
       if (s.err) {
         failures.push({ cmd: `save (${group.title})`, reply: s.reply });
         log(`  ${group.title} NOT saved → ${s.reply}`, 't-err');
-      } else if (s.silent) {
-        silent.push(`save (${group.title})`);
-        log(`  ${group.title} — save sent, no confirmation`, 't-warn');
+      } else if (/Storing/i.test(s.raw) || s.ok) {
+        // The RN-131 answers a save with "Storing in config", not AOK.
+        log(`  ${group.title} saved → ${s.reply || 'stored'}`, 't-ok');
       } else {
-        log(`  ${group.title} saved → ${s.reply || 'OK'}`, 't-ok');
+        silent.push(`save (${group.title})`);
+        log(`  ${group.title} — save not confirmed${s.raw ? ` (${s.raw})` : ''}`, 't-warn');
       }
       await sleep(100);
     }
@@ -213,5 +280,12 @@ export async function restoreRn131(transport, log = () => {}, onStep = () => {})
     }
   }
 
-  return { ok: failures.length === 0, steps: step, failures, silent };
+  const ok = restoreSucceeded({ failures, silent });
+  if (sawInterference) {
+    log('Another client was talking to the mount over Wi-Fi during the restore ' +
+        '(*OPEN*/*CLOS* and ES commands appeared in the replies). That traffic ' +
+        'shares the module and can knock it out of command mode — close the app ' +
+        'or PWA connected to the mount and run this again.', 't-err');
+  }
+  return { ok, steps: step, failures, silent, interference: sawInterference };
 }
