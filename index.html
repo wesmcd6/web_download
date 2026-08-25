@@ -73,22 +73,12 @@
 
     <div class="row" style="margin-top:.9rem">
       <button id="upload" class="danger" disabled>Update firmware</button>
+      <span id="upstate" class="verdict" hidden></span>
       <span id="uphint" class="t-dim"></span>
     </div>
+    <div id="upversion" class="verdict-detail" hidden></div>
     <div id="upconfirm" style="margin-top:.6rem"></div>
     <progress id="prog" hidden></progress>
-
-    <div class="row" style="margin-top:1.2rem">
-      <button id="listen" disabled>Reset and listen</button>
-      <button id="handshake" disabled>Handshake only</button>
-      <button id="ramload" disabled>Load to RAM only</button>
-    </div>
-    <p class="t-dim" style="margin:.6rem 0 0">Diagnostics for a failed update.
-      <strong>Reset and listen</strong> prints the boot splash — writes nothing.
-      <strong>Handshake only</strong> proves the reset wiring and boot ROM are
-      reachable — writes nothing.
-      <strong>Load to RAM only</strong> runs the image without touching EEPROM, so a
-      power cycle undoes it.</p>
   </details>
 
   <!-- 4 ─────────────────────────────────────────────────────────────────── -->
@@ -117,13 +107,19 @@
       <button id="send" class="primary">Send</button>
       <span id="cmdhint" class="t-dim"></span>
     </div>
+    <div id="cmdreply" class="verdict-detail" hidden></div>
   </details>
 
-  <div id="log" hidden></div>
-  <div class="row" style="margin-top:.6rem">
-    <button id="copy">Copy log</button>
-    <button id="clear">Clear</button>
-  </div>
+  <section id="logbox">
+    <div class="logbox-head">
+      <span>Log</span>
+      <span class="row" style="gap:.4rem">
+        <button id="copy">Copy</button>
+        <button id="clear">Clear</button>
+      </span>
+    </div>
+    <div id="log"></div>
+  </section>
 </main>
 
 <script type="module">
@@ -138,7 +134,7 @@ import {
   buildESSi, displayValue, writeSettings,
 } from './src/pmc8-settings.js';
 import { COMMANDS, RISK_LABEL, buildCommand, classify } from './src/pmc8-commands.js';
-import { P1Loader, resetAndListen } from './src/p1-loader.js';
+import { P1Loader } from './src/p1-loader.js';
 import { RUN_FROM_RAM, EEPROM_RUN, estimateSeconds, buildPayload } from './src/p1-protocol.js';
 
 const $ = (id) => document.getElementById(id);
@@ -154,8 +150,18 @@ let image = null;
 let lastInfo = null;
 const view = { baud: 115200, envision: null, esp: null };
 
+// Opening a tool closes the others, so there is only ever one thing on screen
+// and the log below always belongs to what you are looking at.
+for (const d of document.querySelectorAll('details.tool')) {
+  d.addEventListener('toggle', () => {
+    if (!d.open) return;
+    for (const other of document.querySelectorAll('details.tool')) {
+      if (other !== d) other.open = false;
+    }
+  });
+}
+
 function log(msg, cls = '') {
-  logEl.hidden = false;
   const t = new Date().toISOString().slice(11, 23);
   const line = document.createElement('div');
   if (cls) line.className = cls;
@@ -170,19 +176,6 @@ const esc = (s) => String(s).replace(/[&<>]/g, (c) => (
 function row(k, v, extra) {
   return `<tr><th>${esc(k)}</th><td class="val">${esc(v)}${
     extra ? `<br><span class="t-dim">${esc(extra)}</span>` : ''}</td></tr>`;
-}
-
-function hexdump(bytes, max = 2048) {
-  const n = Math.min(bytes.length, max);
-  let out = '';
-  for (let i = 0; i < n; i += 16) {
-    const s = bytes.subarray(i, i + 16);
-    const hex = Array.from(s, (b) => b.toString(16).padStart(2, '0')).join(' ');
-    const asc = Array.from(s, (b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : '.')).join('');
-    out += `${i.toString(16).padStart(4, '0')}  ${hex.padEnd(47)}  ${asc}\n`;
-  }
-  if (bytes.length > max) out += `… ${bytes.length - max} more bytes\n`;
-  return out;
 }
 
 /** Serial-only tools need a SerialLink; Wi-Fi cannot carry them. */
@@ -202,12 +195,53 @@ function refresh() {
   const fwBlock = !onSerial() ? (link ? 'Firmware upload needs the USB cable.' : 'Connect over USB first.')
                 : !image ? 'Choose a firmware image.'
                 : null;
-  $('upload').disabled = !!fwBlock;
-  $('uphint').textContent = fwBlock ?? '';
-  $('listen').disabled = !onSerial();
-  $('handshake').disabled = !onSerial();
-  $('ramload').disabled = !onSerial() || !image;
+  // Leave the button alone once it is showing the FIRMWARE UPDATED result —
+  // that state is the report, and it stands until the section is revisited.
+  if (!fwDone) {
+    $('upload').disabled = !!fwBlock;
+    $('uphint').textContent = fwBlock ?? '';
+  }
 }
+
+// --- firmware result indicator ---------------------------------------------
+
+let fwDone = false;
+
+/** Show the outcome next to the button, with the resulting version beneath. */
+function setFirmwareResult(ok, headline, detail) {
+  fwDone = true;
+  const btn = $('upload');
+  btn.textContent = ok ? 'FIRMWARE UPDATED' : 'UPDATE FAILED';
+  btn.className = ok ? 'ok-btn' : 'danger';
+  btn.disabled = true;
+  $('uphint').textContent = '';
+
+  const state = $('upstate');
+  state.hidden = false;
+  state.textContent = ok ? '✓' : '✕';
+  state.className = `verdict ${ok ? 'good' : 'bad'}`;
+
+  const ver = $('upversion');
+  ver.hidden = false;
+  ver.className = `verdict-detail ${ok ? 'good' : 'bad'}`;
+  ver.innerHTML = `<strong>${esc(headline)}</strong>` +
+                  (detail ? `<br><span class="t-dim">${esc(detail)}</span>` : '');
+}
+
+/** Revisiting the section clears the result and re-arms the button. */
+function clearFirmwareResult() {
+  if (!fwDone) return;
+  fwDone = false;
+  const btn = $('upload');
+  btn.textContent = 'Update firmware';
+  btn.className = 'danger';
+  $('upstate').hidden = true;
+  $('upversion').hidden = true;
+  refresh();
+}
+$('s-firmware').addEventListener('toggle', () => {
+  if ($('s-firmware').open) clearFirmwareResult();
+});
 
 if (!serialAvailable()) {
   const el = $('unsupported');
@@ -663,14 +697,22 @@ async function runUpdate() {
   if (!after) {
     log('The transfer was acknowledged but the mount never answered ESGv!. The image ' +
         'may have landed without running — do NOT treat this as a successful update.', 't-err');
+    setFirmwareResult(false, 'No version reported',
+      'The transfer was acknowledged but the mount did not answer afterwards. ' +
+      'The image may have landed without running.');
   } else if (before && after === before) {
     log(`Firmware still reports ${after} — unchanged.`, 't-err');
-    log('  If you loaded a different version this did NOT take effect. If you reloaded ' +
-        'the same version, unchanged is expected and proves nothing.', 't-dim');
+    setFirmwareResult(false, after,
+      'Unchanged from before the update. If you loaded a different version it did ' +
+      'not take effect; if you reloaded the same one, this proves nothing.');
   } else if (before) {
     log(`UPDATE VERIFIED — firmware changed  ${before}  →  ${after}`, 't-ok');
+    setFirmwareResult(true, after, `Verified — was ${before}`);
   } else {
     log(`Firmware now reports: ${after}`, 't-ok');
+    setFirmwareResult(true, after,
+      'No before-version was captured, so this is what is running rather than proof ' +
+      'that it changed.');
   }
 }
 
@@ -704,54 +746,16 @@ $('upload').addEventListener('click', () => {
   panel.querySelector('[data-act=go]').addEventListener('click', async () => {
     host.innerHTML = '';
     $('upload').disabled = true;
-    try { await runUpdate(); }
-    catch (e) { log(`UPDATE FAILED: ${e.message}`, 't-err'); }
-    finally { $('prog').hidden = true; refresh(); }
-  });
-});
-
-$('listen').addEventListener('click', async () => {
-  $('listen').disabled = true;
-  try {
-    const r = await resetAndListen(link.transport, { progress: (m) => log(`  ${m}`) });
-    if (!r.splash.length) {
-      log('SILENT. Normal firmware prints a boot splash, so this points at the wrong ' +
-          'reset line or polarity, the wrong baud, or the port being held elsewhere.', 't-err');
-    } else {
-      log(`${r.splash.length} bytes of boot output:`, 't-ok');
-      log(hexdump(r.splash));
-      if (r.p9 !== null) log(`  splash reports Mount Type: P9 = ${r.p9}`);
-      if (r.wifiLine) log(`  splash reports Wi-Fi module: ${r.wifiLine}`);
+    try {
+      await runUpdate();
+    } catch (e) {
+      log(`UPDATE FAILED: ${e.message}`, 't-err');
+      setFirmwareResult(false, 'Update failed', e.message);
+    } finally {
+      $('prog').hidden = true;
+      refresh();
     }
-    log(r.versionConfirmed ? `ESGv! answered: ${r.firmware}`
-                           : `ESGv! did not answer: ${r.versionError}`,
-        r.versionConfirmed ? 't-ok' : 't-err');
-  } catch (e) { log(e.message, 't-err'); } finally { refresh(); }
-});
-
-$('handshake').addEventListener('click', async () => {
-  $('handshake').disabled = true;
-  try {
-    const v = await new P1Loader(link.transport, (m) => log(`  ${m}`)).handshake();
-    log(v === 1
-      ? 'HANDSHAKE OK — Propeller version 1. Reset wiring, polarity and encoder confirmed.'
-      : `Handshake completed but version is ${v}, expected 1.`, v === 1 ? 't-ok' : 't-err');
-  } catch (e) { log(e.message, 't-err'); } finally { refresh(); }
-});
-
-$('ramload').addEventListener('click', async () => {
-  $('ramload').disabled = true;
-  try {
-    log('Loading to RAM (reversible by power cycle)…');
-    $('prog').hidden = false;
-    const { version, seconds } = await new P1Loader(link.transport, (m) => log(`  ${m}`))
-      .load(image, RUN_FROM_RAM);
-    log(`RAM load complete in ${seconds.toFixed(1)}s (chip version ${version}).`, 't-ok');
-    const after = await readVersion(link, 40, 'waiting for the image to boot');
-    log(after ? `Firmware now reports: ${after}` : 'No ESGv! answer after the RAM load.',
-        after ? 't-ok' : 't-err');
-  } catch (e) { log(e.message, 't-err'); }
-  finally { $('prog').hidden = true; refresh(); }
+  });
 });
 
 // --- 4. command console -----------------------------------------------------
@@ -810,25 +814,39 @@ $('send').addEventListener('click', async () => {
   try { text = pendingCommand().text; }
   catch (e) { log(e.message, 't-err'); return; }
 
+  const out = $('cmdreply');
+  const showReply = (ok, body, note) => {
+    out.hidden = false;
+    out.className = `verdict-detail ${ok ? 'good' : 'bad'}`;
+    out.innerHTML = `<span class="mono">${esc(body)}</span>` +
+                    (note ? `<br><span class="t-dim">${esc(note)}</span>` : '');
+  };
+
   $('send').disabled = true;
+  out.hidden = true;
   try {
     if (!link) throw new Error('Not connected.');
     log(`> ${text}`);
     const reply = await link.send(text, { timeoutMs: 5000 });
     if (!reply.trim()) {
       log('< (no reply)', 't-err');
-      log('  Some commands answer nothing by design — a real Envision exit and a ' +
-          'malformed command both look like this.', 't-dim');
-    } else log(`< ${JSON.stringify(reply)}`, 't-ok');
+      showReply(false, '(no reply)',
+        'Some commands answer nothing by design — a real Envision exit and a ' +
+        'malformed command both look like this.');
+    } else {
+      log(`< ${JSON.stringify(reply)}`, 't-ok');
+      showReply(true, reply.replace(/[\r\n]+/g, ' ').trim());
+    }
   } catch (e) {
     log(e.message, 't-err');
+    showReply(false, e.message);
   } finally {
     $('send').disabled = false;
   }
 });
 
 $('copy').addEventListener('click', () => navigator.clipboard.writeText(logEl.innerText));
-$('clear').addEventListener('click', () => { logEl.innerHTML = ''; logEl.hidden = true; });
+$('clear').addEventListener('click', () => { logEl.innerHTML = ''; });
 </script>
 </body>
 </html>

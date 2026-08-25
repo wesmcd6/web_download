@@ -132,3 +132,58 @@ details summary { cursor: pointer; color: var(--muted); }
   padding: .35rem .5rem;
 }
 .mono { font-family: var(--mono); font-size: 13px; }
+
+/* Outcome indicators — the answer should be readable without the log. */
+.verdict {
+  font-weight: 800;
+  font-size: 1.15rem;
+  line-height: 1;
+  padding: .2rem .45rem;
+  border-radius: 5px;
+}
+.verdict.good { color: var(--ok); background: #12331f; }
+.verdict.bad { color: var(--danger); background: #38191a; }
+
+.verdict-detail {
+  margin-top: .6rem;
+  padding: .6rem .8rem;
+  border-radius: 7px;
+  border-left: 3px solid var(--line);
+  background: var(--panel-2);
+}
+.verdict-detail.good { border-color: var(--ok); background: #102a1c; }
+.verdict-detail.bad { border-color: var(--danger); background: #2a1514; }
+
+button.ok-btn {
+  background: var(--ok);
+  border-color: var(--ok);
+  color: #062313;
+  font-weight: 800;
+  letter-spacing: .03em;
+}
+button.ok-btn:disabled { opacity: 1; cursor: default; }
+
+/* The log is a separate surface, not another card in the stack. */
+#logbox {
+  margin-top: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0b0e13;
+}
+.logbox-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: .5rem .75rem;
+  background: var(--panel-2);
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: .82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+}
+.logbox-head button { padding: .25rem .6rem; font-size: .8rem; }
+#logbox #log { border: 0; border-radius: 0; margin: 0; height: 260px; }
