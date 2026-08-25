@@ -397,6 +397,54 @@ export async function readEspVersion(transport, cfg, log = () => {}) {
   return result;
 }
 
+/**
+ * Turn "boot into Envision" on or off.
+ *
+ * ESSe3! = enable at boot, ESSe4! = disable at boot (firmware :4706-4731).
+ * Both write SET#ENVISION_BOOT and commit, then the firmware reads the byte
+ * BACK and only echoes the digit if it stuck:
+ *
+ *   success -> "ESSe3!" / "ESSe4!"   (6 chars, digit present)
+ *   failure -> "ESSe!"               (5 chars, no digit)
+ *
+ * The presence of the digit is the whole pass/fail discriminator — matching on
+ * "ESSe" alone matches both, which is the easy mistake here.
+ *
+ * Unlike ESSe0! (runtime disable), cases 3 and 4 do NOT reboot the module and
+ * do not touch ENVISION_ON, so reading ESGe! straight back is safe. The
+ * dashboard's known "don't poll ESGe right after ESSe0" hazard does not apply.
+ */
+export async function setEnvisionBoot(link, on, log = () => {}) {
+  const cmd = on ? 'ESSe3!' : 'ESSe4!';
+  log(`Sending ${cmd} (${on ? 'boot into Envision' : 'do not boot into Envision'})…`);
+
+  const raw = await link.send(cmd, { expect: 'ESSe', timeoutMs: 4000 });
+  const i = raw.indexOf('ESSe');
+  if (i < 0) return { ok: false, error: `No reply to ${cmd}.`, raw };
+
+  const body = raw.slice(i);
+  if (!/^ESSe[34]!/.test(body)) {
+    return {
+      ok: false,
+      error: 'The mount rejected the change — it replied with a bare ESSe! ' +
+             '(no digit), which means the flag did not stick.',
+      raw,
+    };
+  }
+
+  // Confirm from the mount's own state rather than from its acknowledgement.
+  const check = parseESGe(await link.send('ESGe!', { expect: 'ESGe', timeoutMs: 4000 }));
+  if (!check) return { ok: true, verified: false, raw, warn: 'ESGe! gave no usable read-back.' };
+  if (check.boot !== on) {
+    return {
+      ok: false, raw, envision: check,
+      error: `The mount acknowledged ${cmd} but ESGe! still reports the boot ` +
+             `flag ${check.boot ? 'set' : 'clear'}.`,
+    };
+  }
+  return { ok: true, verified: true, raw, envision: check };
+}
+
 /** Parse the ESGv reply: "ESGv" + build string + "!" (no CRLF terminator). */
 export function parseESGv(reply) {
   const s = typeof reply === 'string' ? reply : DEC.decode(reply);

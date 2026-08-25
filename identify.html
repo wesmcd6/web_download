@@ -53,6 +53,7 @@ import { SerialTransport, requestPort } from './src/p1-serial.js';
 import { SerialLink, HttpLink, serialAvailable } from './src/mount-link.js';
 import {
   identify, settingsRows, readEnvision, readEspVersion,
+  setEnvisionBoot, fastServerText,
 } from './src/pmc8-identify.js';
 import {
   EDITABLE_FIELDS, READ_ONLY_FIELDS, currentValues, changedFields,
@@ -157,6 +158,23 @@ function show(info, baud, envision, esp) {
                    envision?.text ?? 'Not read',
                    envision?.value != null ? `ESGe! = ${envision.value}` : null);
 
+  // Boot-into-Envision is its own command (ESSe3!/ESSe4!), not an ESSi field,
+  // so it gets its own row and its own dispatch. It is also the mitigation for
+  // the ESP8266 ":80 dead after Envision exit" defect — booting straight into
+  // Envision means the exit path never runs.
+  let bootRow = '';
+  if (envision && envision.value != null) {
+    bootRow = `<tr><th>Boot into Envision</th><td class="val">
+      <select id="f_envboot" style="${INPUT_STYLE}">
+        <option value="1"${envision.boot ? ' selected' : ''}>On</option>
+        <option value="0"${envision.boot ? '' : ' selected'}>Off</option>
+      </select>${envision.able ? '' :
+        '<br><span class="t-dim">This module is not Envision-capable, so the ' +
+        'flag has no effect until its Wi-Fi firmware is updated.</span>'}</td></tr>`;
+  } else if (envision?.skipped) {
+    bootRow = row('Boot into Envision', 'Not available', envision.text);
+  }
+
   // The two firmware versions sit together at the top: the Propeller's, and
   // the Wi-Fi module's. They are different processors and both matter.
   let espFirmware = '';
@@ -214,6 +232,7 @@ function show(info, baud, envision, esp) {
         ${editableRows(info)}
         ${readOnlyRows(info)}
         ${fast}
+        ${bootRow}
         ${moduleDetail}
         ${connNote}
         ${row('Raw ESGi', info.raw)}
@@ -230,7 +249,7 @@ function show(info, baud, envision, esp) {
       </div>
     </div>`;
 
-  wireEditor(info);
+  wireEditor(info, envision);
 
   $('copycfg').addEventListener('click', () => {
     const lines = [`Mount firmware: ${info.firmware}`];
@@ -260,9 +279,13 @@ function formValues() {
   return out;
 }
 
-function wireEditor(cfg) {
+function wireEditor(cfg, envision) {
   const save = $('save');
   const hint = $('savehint');
+  const bootEl = $('f_envboot');           // absent on RN-131 / unread Envision
+  const bootWas = envision?.boot ? 1 : 0;
+  const bootNow = () => (bootEl ? Number(bootEl.value) : bootWas);
+  const bootChanged = () => !!bootEl && bootNow() !== bootWas;
 
   const refresh = () => {
     let diff;
@@ -275,10 +298,11 @@ function wireEditor(cfg) {
       hint.className = 't-err';
       return;
     }
-    save.disabled = diff.length === 0;
-    hint.className = diff.length ? 't-err' : 't-dim';
-    hint.textContent = diff.length
-      ? `${diff.length} change${diff.length > 1 ? 's' : ''} pending — this writes to EEPROM.`
+    const total = diff.length + (bootChanged() ? 1 : 0);
+    save.disabled = total === 0;
+    hint.className = total ? 't-err' : 't-dim';
+    hint.textContent = total
+      ? `${total} change${total > 1 ? 's' : ''} pending — this writes to EEPROM.`
       : 'Change a value to enable saving.';
   };
 
@@ -286,6 +310,7 @@ function wireEditor(cfg) {
     $(`f_${f.key}`).addEventListener('input', refresh);
     $(`f_${f.key}`).addEventListener('change', refresh);
   }
+  if (bootEl) bootEl.addEventListener('change', refresh);
   refresh();
 
   const slog = $('savelog');
@@ -303,15 +328,19 @@ function wireEditor(cfg) {
   // "nothing happened".
   save.addEventListener('click', () => {
     const diff = changedFields(cfg, formValues());
-    if (!diff.length) return;
+    if (!diff.length && !bootChanged()) return;
 
     slog.innerHTML = '';
     const panel = document.createElement('div');
     panel.className = 'notice bad';
-    const list = diff.map((d) =>
+    let list = diff.map((d) =>
       `<li>${esc(d.label)}: <strong>${esc(displayValue(d, d.was))}</strong> → ` +
       `<strong>${esc(displayValue(d, d.now))}</strong>${
         d.warn ? `<br><span class="t-dim">${esc(d.warn)}</span>` : ''}</li>`).join('');
+    if (bootChanged()) {
+      list += `<li>Boot into Envision: <strong>${bootWas ? 'On' : 'Off'}</strong> → ` +
+              `<strong>${bootNow() ? 'On' : 'Off'}</strong></li>`;
+    }
     panel.innerHTML = `
       <div><strong>Write these to the mount's EEPROM?</strong></div>
       <ul style="margin:.6rem 0;padding-left:1.1rem">${list}</ul>
@@ -330,11 +359,39 @@ function wireEditor(cfg) {
 
   async function doWrite(panel) {
     const values = formValues();
+    const wantBoot = bootNow();
+    const doBoot = bootChanged();
+    const doEssi = changedFields(cfg, values).length > 0;
     panel.remove();
     save.disabled = true;
 
     try {
       if (!link) throw new Error('Not connected — read the settings first.');
+
+      // Boot-into-Envision is a separate command from ESSi. Send it first so
+      // that if the ESSi write is rejected, this one has still landed and is
+      // reported independently rather than being lost in the failure.
+      let newEnvision = view.envision;
+      if (doBoot) {
+        const r = await setEnvisionBoot(link, !!wantBoot, (m) => put(m));
+        if (!r.ok) {
+          put(`Boot into Envision: ${r.error}`, 't-err');
+        } else {
+          put(`Boot into Envision is now ${wantBoot ? 'ON' : 'OFF'}` +
+              (r.verified ? ' (confirmed by ESGe!).' : ' (not read back).'), 't-ok');
+          if (r.envision) {
+            newEnvision = { ...r.envision, text: fastServerText(r.envision) };
+            view.envision = newEnvision;
+          }
+        }
+      }
+
+      if (!doEssi) {
+        // Nothing for ESSi to do — refresh so the boot row's baseline resets.
+        show({ firmware: cfg.firmware, ...cfg }, view.baud, view.envision, view.esp);
+        put('Done.', 't-ok');
+        return;
+      }
 
       const res = await writeSettings(link, values, (m) => put(m));
       if (!res.accepted) {
