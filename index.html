@@ -131,6 +131,7 @@ import { SerialLink, HttpLink, serialAvailable, normalizeHost } from './src/moun
 import {
   identify, settingsRows, readEnvision, readEspVersion,
   setEnvisionBoot, fastServerText, ask, parseESGv,
+  versionTokenFromFilename, versionMatchesToken,
 } from './src/pmc8-identify.js';
 import {
   EDITABLE_FIELDS, READ_ONLY_FIELDS, currentValues, changedFields,
@@ -147,6 +148,7 @@ const logEl = $('log');
 // for a port and the mount is reset once rather than per tool.
 let link = null;
 let image = null;
+let imageName = '';   // the filename carries the version we are meant to end up at
 
 // The last successful read, so reopening the settings section shows what we
 // already know instead of a blank panel.
@@ -700,6 +702,7 @@ $('s-settings').addEventListener('toggle', () => {
 $('file').addEventListener('change', async (ev) => {
   const f = ev.target.files[0];
   if (!f) return;
+  imageName = f.name;
   image = new Uint8Array(await f.arrayBuffer());
   const digest = await crypto.subtle.digest('SHA-256', image);
   const hash = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
@@ -711,9 +714,14 @@ $('file').addEventListener('change', async (ev) => {
     note = `<span class="t-err">rejected: ${e.message}</span>`;
     image = null;
   }
+  const token = versionTokenFromFilename(f.name);
   $('fileinfo').innerHTML =
     `<strong>${esc(f.name)}</strong> — ${image ? image.length : f.size} bytes` +
-    `${image ? ` (${image.length / 4} longs)` : ''}<br>SHA-256 ${hash}<br>${note}`;
+    `${image ? ` (${image.length / 4} longs)` : ''}<br>SHA-256 ${hash}<br>${note}` +
+    (token
+      ? `<br>Expecting the mount to report <strong>${esc(token)}</strong> afterwards.`
+      : '<br>No version token in the filename, so the result can only be reported, ' +
+        'not checked against what you loaded.');
   log(`Image: ${f.name}, ${f.size} bytes, sha256 ${hash}`);
   refresh();
 });
@@ -735,29 +743,48 @@ async function runUpdate() {
   busy('upstatus', 'Writing to EEPROM — do not disconnect…');
   const { version, seconds } = await new P1Loader(t, progressTo('upstatus'))
     .load(image, EEPROM_RUN);
-  $('prog').hidden = true;
   log(`Transfer complete in ${seconds.toFixed(1)}s (chip version ${version}).`, 't-ok');
 
+  // Deliberately leave the progress bar running. The transfer finishing is not
+  // the end of the job — the mount still has to reboot, which takes longer than
+  // the write did. Hiding the bar here made it look finished while it sat
+  // silently rebooting.
+  busy('upstatus', 'Transfer done — waiting for the mount to reboot…');
+
   const after = await readVersion(link, 40, 'Waiting for the new firmware to boot', 'upstatus');
+  $('prog').hidden = true;
+
+  // Judge the update by what the mount is RUNNING versus what we loaded — not
+  // by whether the version changed. Reloading the same image leaves it
+  // identical, and that is a success. The failure signals are the loader
+  // throwing (handled by the caller) and the mount not answering at all.
+  const token = versionTokenFromFilename(imageName);
+
   if (!after) {
     log('The transfer was acknowledged but the mount never answered ESGv!. The image ' +
         'may have landed without running — do NOT treat this as a successful update.', 't-err');
     setFirmwareResult(false, 'No version reported',
       'The transfer was acknowledged but the mount did not answer afterwards. ' +
       'The image may have landed without running.');
-  } else if (before && after === before) {
-    log(`Firmware still reports ${after} — unchanged.`, 't-err');
-    setFirmwareResult(false, after,
-      'Unchanged from before the update. If you loaded a different version it did ' +
-      'not take effect; if you reloaded the same one, this proves nothing.');
-  } else if (before) {
+  } else if (token && !versionMatchesToken(after, token)) {
+    // The one genuine mismatch: we know what we loaded and it is not running.
+    log(`MISMATCH — loaded ${token} but the mount reports ${after}`, 't-err');
+    setFirmwareResult(false, after, `Expected ${token} from ${imageName}. The mount is ` +
+      'running something else, so the image did not take effect.');
+  } else if (token) {
+    log(`UPDATE VERIFIED — mount reports ${after}, matching ${token}`, 't-ok');
+    setFirmwareResult(true, after, before && after === before
+      ? `Matches ${imageName} — same version as before, which is expected when ` +
+        'reloading the same image.'
+      : `Matches ${imageName}${before ? ` — was ${before}` : ''}`);
+  } else if (before && after !== before) {
     log(`UPDATE VERIFIED — firmware changed  ${before}  →  ${after}`, 't-ok');
-    setFirmwareResult(true, after, `Verified — was ${before}`);
+    setFirmwareResult(true, after, `Changed — was ${before}`);
   } else {
     log(`Firmware now reports: ${after}`, 't-ok');
     setFirmwareResult(true, after,
-      'No before-version was captured, so this is what is running rather than proof ' +
-      'that it changed.');
+      `The filename carried no version token, so this is what the mount reports ` +
+      `rather than a match against ${imageName}.`);
   }
 }
 

@@ -520,6 +520,29 @@ export async function setEnvisionBoot(link, on, log = () => {}) {
   return { ok: true, verified: true, raw, envision: check };
 }
 
+/**
+ * Pull the build token out of a firmware filename, e.g.
+ *   "20A02.2.0.1.bt.binary"   -> "20A02.2.0.1.bt"
+ *   "ES20A02.2.0.0.bt.binary" -> "20A02.2.0.0.bt"
+ *
+ * Used to judge an update by what was actually loaded rather than by whether
+ * the version changed. Reloading the same image leaves the version identical,
+ * and that is a success, not a failure.
+ *
+ * Returns null when the name carries no recognisable token — then the caller
+ * has to fall back on weaker evidence and should say so.
+ */
+export function versionTokenFromFilename(name) {
+  const m = String(name ?? '').match(/20A02\.[0-9]+(?:\.[0-9]+)*\.bt/i);
+  return m ? m[0] : null;
+}
+
+/** Does the version the mount reports contain the token we meant to load? */
+export function versionMatchesToken(reported, token) {
+  if (!reported || !token) return false;
+  return String(reported).toLowerCase().includes(String(token).toLowerCase());
+}
+
 /** Parse the ESGv reply: "ESGv" + build string + "!" (no CRLF terminator). */
 export function parseESGv(reply) {
   const s = typeof reply === 'string' ? reply : DEC.decode(reply);

@@ -50,12 +50,13 @@ export const COMMANDS = [
   { key: 'ESV!', risk: 'read', template: 'ESV!', params: [],
     desc: 'Request motor state vector' },
 
-  // ---- reads with a caveat ------------------------------------------------
-  { key: 'ESGe!', risk: 'write', template: 'ESGe!', params: [],
-    desc: 'Get Envision (Fast Server) status — 3-bit field: 1 = capable, 2 = boot flag, 4 = currently on',
-    note: 'Looks like a getter. If the module answers ERROR the firmware clears ' +
-          'ENVISION_BOOT and commits — one EEPROM write, only on hardware where ' +
-          'the flag was meaningless anyway.' },
+  // ESGe! is a getter like the rest of the ESGx! family. (There is one branch
+  // where a module that answers ERROR gets its now-meaningless boot flag
+  // cleared, documented in docs/FIRMWARE-NOTES.md — but that is self-correcting
+  // housekeeping on hardware the flag does not apply to, not a setting change,
+  // and it never fires on a capable module. Not worth flagging in the UI.)
+  { key: 'ESGe!', risk: 'read', template: 'ESGe!', params: [],
+    desc: 'Get Envision (Fast Server) status — 3-bit field: 1 = capable, 2 = boot flag, 4 = currently on' },
 
   // ---- settings writes ----------------------------------------------------
   { key: 'ESSe<p>!', risk: 'reboot', template: 'ESSe{p}!',
