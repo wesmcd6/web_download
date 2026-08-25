@@ -31,11 +31,12 @@
           <option value="http">Wi-Fi</option>
         </select>
       </label>
-      <span id="wifibox" hidden>
+      <span id="wifibox">
         <label>mount address
           <input id="mounthost" type="text" inputmode="decimal" placeholder="192.168.1.50"
                  style="font:inherit;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:.35rem .5rem;width:11rem">
         </label>
+        <span id="wifinote" class="t-dim"></span>
       </span>
     </div>
     <div class="row">
@@ -102,8 +103,14 @@ if (!serialAvailable()) {
   $('how').querySelector('option[value=serial]').disabled = true;
 }
 
+// The address field stays VISIBLE at all times and is only disabled on USB.
+// Hiding it made it look as though the Wi-Fi option had disappeared whenever
+// the page reloaded back to the USB default.
 function refreshHow() {
-  $('wifibox').hidden = $('how').value !== 'http';
+  const wifi = $('how').value === 'http';
+  $('mounthost').disabled = !wifi;
+  $('mounthost').style.opacity = wifi ? '1' : '0.4';
+  $('wifinote').textContent = wifi ? '' : '(Wi-Fi only)';
 }
 $('how').addEventListener('change', refreshHow);
 refreshHow();
@@ -437,7 +444,9 @@ function wireEditor(cfg, envision) {
 }
 
 $('go').addEventListener('click', async () => {
+  const goLabel = $('go').textContent;
   $('go').disabled = true;
+  $('go').textContent = 'Connecting…';
   $('result').hidden = true;
   logEl.innerHTML = '';
   try {
@@ -466,14 +475,24 @@ $('go').addEventListener('click', async () => {
       } else {
         const port = await requestPort();
         const t = new SerialTransport(port, { baudRate: 115200, log });
-        await t.open();
+        try {
+          await t.open();
+        } catch (e) {
+          // By far the most common cause, and the message Chrome gives is
+          // unhelpful about it.
+          throw new Error(
+            `Could not open the serial port: ${e.message}. ` +
+            'Windows will not share a COM port — close the firmware loader tab, ' +
+            'UFCT, the PMC8 Dashboard, or any other tool holding it, then retry.');
+        }
         link = new SerialLink(t);
         // Windows asserts DTR while configuring the port, before any of our
         // code runs, and DTR is the Propeller's reset line. Nothing in Web
         // Serial can prevent that — SerialOptions has no DTR field. Say so
         // rather than leaving a 20-second silence looking like a fault.
-        log('Port open. Opening it resets the mount on Windows, so it may take ' +
-            '15-20s to answer — this is expected, not a fault.', 't-dim');
+        log('Port open. Opening it resets the mount on Windows, so the next ' +
+            '15-20 seconds of "no reply yet" are the mount rebooting — expected, ' +
+            'not a fault. Leave it running.', 't-dim');
       }
     }
 
@@ -543,6 +562,7 @@ $('go').addEventListener('click', async () => {
     log(e.message, 't-err');
   } finally {
     $('go').disabled = false;
+    $('go').textContent = goLabel;
     $('disconnect').disabled = !link;
   }
 });
