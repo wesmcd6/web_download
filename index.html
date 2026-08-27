@@ -440,6 +440,25 @@ if (HTTPS_BLOCKS_WIFI) {
   $('how').querySelector('option[value=http]').disabled = true;
   $('how').value = serialAvailable() ? 'serial' : 'http';
 }
+
+/*
+ * Served BY the mount? Then we already know its address — it is the one in the
+ * address bar. Filling it in is the difference between "open the page and press
+ * Connect" and "open the page, then type the address of the machine you just
+ * loaded it from", which is a silly thing to ask.
+ *
+ * Only when the origin could actually BE a mount: plain http (the mount has no
+ * TLS), and not a loopback dev server, where the hostname is this PC and
+ * seeding it would just prefill a wrong answer. The value is left editable —
+ * this is a default, not a lock, so a mount reached through a different address
+ * than the page still works.
+ */
+if (!HTTPS_BLOCKS_WIFI
+    && !['localhost', '127.0.0.1', '[::1]', ''].includes(window.location.hostname)
+    && !$('mounthost').value) {
+  $('mounthost').value = window.location.hostname;
+}
+
 $('how').addEventListener('change', refreshHow);
 refreshHow();
 refresh();
