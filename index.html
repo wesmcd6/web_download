@@ -447,13 +447,22 @@ if (HTTPS_BLOCKS_WIFI) {
  * Connect" and "open the page, then type the address of the machine you just
  * loaded it from", which is a silly thing to ask.
  *
- * Only when the origin could actually BE a mount: plain http (the mount has no
- * TLS), and not a loopback dev server, where the hostname is this PC and
- * seeding it would just prefill a wrong answer. The value is left editable —
- * this is a default, not a lock, so a mount reached through a different address
- * than the page still works.
+ * Three conditions, and the port one is the subtle one:
+ *
+ *   - plain http. The mount has no TLS, and on an https copy the Wi-Fi
+ *     transport is blocked as mixed content anyway.
+ *   - not loopback. A dev server's hostname is this PC, not a mount.
+ *   - DEFAULT PORT. The mount's bridge serves on :80. `serve.bat` deliberately
+ *     binds 0.0.0.0 on :8765 and tells you to open http://<pc-ip>:8765/ from a
+ *     phone — and there the hostname is the PC serving the page, NOT the mount
+ *     the user wants to reach. Without this check that case gets confidently
+ *     prefilled with the wrong address, which is worse than an empty box.
+ *
+ * The value stays editable — a default, not a lock — so a mount reached at a
+ * different address than the page still works.
  */
 if (!HTTPS_BLOCKS_WIFI
+    && window.location.port === ''
     && !['localhost', '127.0.0.1', '[::1]', ''].includes(window.location.hostname)
     && !$('mounthost').value) {
   $('mounthost').value = window.location.hostname;
