@@ -31,7 +31,11 @@ tmp/
 
 # Internal notes - kept locally, deliberately NOT published.
 # Firmware internals, hardware test logs and design/business context.
+# Private design notes. This repo is PUBLIC; these quote firmware internals,
+# partition tables and internal repo paths. Canonical copies live in the private
+# pmc8-esp32-config repo (MOUNT-HOSTED-APP.md) and web_download-private-docs.
 docs/FIRMWARE-NOTES.md
 docs/HARDWARE-LOG.md
 docs/DESIGN.md
+docs/MOUNT-HOSTED-APP.md
 test/
